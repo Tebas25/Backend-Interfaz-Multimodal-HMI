@@ -1,0 +1,36 @@
+name: Multimodal Interface Backend CI (Integración Continua)
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar uv y habilitar caché
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Configurar Python
+        run: uv python install
+
+      - name: Instalar dependencias del proyecto
+        run: uv sync --all-extras --dev
+
+      - name: Análisis de Código y Estilo
+        run: |
+          uv run black --check app/
+          uv run flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Pruebas Unitarias y Cobertura
+        run: |
+          uv run pytest test/ --cov=app --cov-report=term-missing --cov-fail-under=80

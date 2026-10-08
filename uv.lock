@@ -48,14 +48,14 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
-    { name = "pydantic" },
-    { name = "pytest" },
-    { name = "requests" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "black" },
+    { name = "flake8" },
+    { name = "httpx" },
+    { name = "pytest" },
     { name = "pytest-cov" },
 ]
 
@@ -462,6 +462,20 @@ wheels = [
 ]
 
 [[package]]
+name = "flake8"
+version = "7.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mccabe" },
+    { name = "pycodestyle" },
+    { name = "pyflakes" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c2/94/85870fc02dfe4ab0885c440e7e41f6a986b10e43eca6717e90f8ce1215cc/flake8-7.4.1.tar.gz", hash = "sha256:84ea5afcaf344487b0ea5baaebb8100f4cfaebc01f755998f75876664029f587", size = 47897, upload-time = "2026-09-23T12:21:59.283Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/d4/8e58a7221419bf8cb194f362ab26abf504c983135975e4c785fac0852886/flake8-7.4.1-py2.py3-none-any.whl", hash = "sha256:78480274a6d7289d9cb8eafeda241fac57d4ea687d26e32dfdca37b72cdeddad", size = 57449, upload-time = "2026-09-23T12:21:58.085Z" },
+]
+
+[[package]]
 name = "googleapis-common-protos"
 version = "1.75.5"
 source = { registry = "https://pypi.org/simple" }
@@ -602,6 +616,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/df/5bd7a48c256faecd1d36edc13133e51397e41b73bb77e1a69deab746ebac/markupsafe-3.0.3-cp314-cp314t-win32.whl", hash = "sha256:915c04ba3851909ce68ccc2b8e2cd691618c4dc4c4232fb7982bca3f41fd8c3d", size = 14819, upload-time = "2025-09-27T18:37:26.285Z" },
     { url = "https://files.pythonhosted.org/packages/1a/8a/0402ba61a2f16038b48b39bccca271134be00c5c9f0f623208399333c448/markupsafe-3.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4faffd047e07c38848ce017e8725090413cd80cbc23d86e55c587bf979e579c9", size = 15426, upload-time = "2025-09-27T18:37:27.316Z" },
     { url = "https://files.pythonhosted.org/packages/70/bc/6f1c2f612465f5fa89b95bead1f44dcb607670fd42891d8fdcd5d039f4f4/markupsafe-3.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:32001d6a8fc98c8cb5c947787c5d08b0a50663d139f1305bac5885d98d9b40fa", size = 14146, upload-time = "2025-09-27T18:37:28.327Z" },
+]
+
+[[package]]
+name = "mccabe"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/ff/0ffefdcac38932a54d2b5eed4e0ba8a408f215002cd178ad1df0f2806ff8/mccabe-0.7.0.tar.gz", hash = "sha256:348e0240c33b60bbdf4e523192ef919f28cb2c3d7d5c7794f74009290f236325", size = 9658, upload-time = "2022-01-24T01:14:51.113Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/1a/1f68f9ba0c207934b35b86a8ca3aad8395a3d6dd7921c0686e23853ff5a9/mccabe-0.7.0-py2.py3-none-any.whl", hash = "sha256:6c2d30ab6be0e4a46919781807b4f0d834ebdd6c6e3dca0bda5a15f863427b6e", size = 7350, upload-time = "2022-01-24T01:14:49.62Z" },
 ]
 
 [[package]]
@@ -785,6 +808,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pycodestyle"
+version = "2.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/df/178e41c9ed0ff33c23b3f3757e4e658c889f9abc5ad76ece6cd607b12e9c/pycodestyle-2.15.0.tar.gz", hash = "sha256:318f5db083869b4c4dad922d0b11124fb27ab181b6730b93371da671e31bd50e", size = 39765, upload-time = "2026-09-22T22:15:34.926Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/56/e2/480bcdb153feecde4d736b18c908c7eee4846f11d7547d2e0c71499af630/pycodestyle-2.15.0-py2.py3-none-any.whl", hash = "sha256:12fd2f73c7b8ee8845a0431111df8faf4c1a07d6e64e2ee7f0c74014dab14181", size = 31583, upload-time = "2026-09-22T22:15:34.007Z" },
+]
+
+[[package]]
 name = "pydantic"
 version = "2.13.5"
 source = { registry = "https://pypi.org/simple" }
@@ -870,6 +902,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/68/ca/31c57507b13119d7d3cfa1576dad2911a4861e3be07b579395f4e9d393f9/pydantic_settings-2.15.0.tar.gz", hash = "sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117", size = 261253, upload-time = "2026-08-07T09:24:57.419Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/30/a4/2bffa9f8e804325a09867f0e9d30795c80ea9f8d62560bd1b6ad6220eb2f/pydantic_settings-2.15.0-py3-none-any.whl", hash = "sha256:0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42", size = 69413, upload-time = "2026-08-07T09:24:55.839Z" },
+]
+
+[[package]]
+name = "pyflakes"
+version = "4.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/5e/17305a7708e22df56b332f2f4c202d0a830e9689634da2f727212d806de9/pyflakes-4.0.2.tar.gz", hash = "sha256:dcf9cfcece3d9dacc66b7dd2fa217c1a1b79e3075bf488909c15e0857203fd24", size = 67173, upload-time = "2026-10-03T21:14:01.663Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/a8/7df0a3b4f8166c2fb7fe0195f88a0a643cfb7cd1b0430c19f74bd01771f5/pyflakes-4.0.2-py2.py3-none-any.whl", hash = "sha256:01faee1160feadfd9d58c9631a895126ba2032c2e8748e32a96ab51cbd084c6d", size = 66216, upload-time = "2026-10-03T21:13:59.732Z" },
 ]
 
 [[package]]
