@@ -1,0 +1,1 @@
+COBOT_ID = "CBT000T"
