@@ -1,10 +1,12 @@
 from fastapi import FastAPI
+from app.api.endpoints import catalog_router
 
 app = FastAPI(
     title="API Bartender Robótico - Módulo Multimodal",
     description="Estructura base de la API local.",
     version="1.0.0",
 )
+app.include_router(catalog_router)
 
 
 @app.get("/")
