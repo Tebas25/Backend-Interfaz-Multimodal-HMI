@@ -5,22 +5,27 @@ from app.core.config import Settings
 
 @pytest.fixture
 def sin_env(monkeypatch):
-    for k in ("get_catalog_url", "kong_auth_key", "PROJECT_NAME"):
+    for k in ("get_catalog_url", "micro_url", "kong_auth_key", "PROJECT_NAME"):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
 
 
 def test_carga_desde_archivo_env(sin_env, tmp_path):
     env = tmp_path / ".env"
-    env.write_text("get_catalog_url=http://desde-env/\nkong_auth_key=abc123\n")
+    env.write_text(
+        "get_catalog_url=http://desde-env/\nmicro_url=http://micro-env/\nkong_auth_key=abc123\n"
+    )
     s = Settings(_env_file=env)
     assert s.get_catalog_url == "http://desde-env/"
+    assert s.micro_url == "http://micro-env/"
     assert s.kong_auth_key == "abc123"
 
 
 def test_env_del_sistema_tiene_prioridad_sobre_archivo(sin_env, tmp_path):
     env = tmp_path / ".env"
-    env.write_text("get_catalog_url=http://archivo/\nkong_auth_key=archivo\n")
+    env.write_text(
+        "get_catalog_url=http://archivo/\nmicro_url=http://micro/\nkong_auth_key=archivo\n"
+    )
     sin_env.setenv("kong_auth_key", "sistema")
     s = Settings(_env_file=env)
     assert s.kong_auth_key == "sistema"
@@ -28,10 +33,13 @@ def test_env_del_sistema_tiene_prioridad_sobre_archivo(sin_env, tmp_path):
 
 
 def test_dot_env_en_directorio_actual(sin_env, tmp_path):
-    (tmp_path / ".env").write_text("get_catalog_url=http://cwd/\nkong_auth_key=cwd\n")
+    (tmp_path / ".env").write_text(
+        "get_catalog_url=http://cwd/\nmicro_url=http://micro-cwd/\nkong_auth_key=cwd\n"
+    )
     sin_env.chdir(tmp_path)
     s = Settings()  # usa model_config["env_file"] == ".env"
     assert s.get_catalog_url == "http://cwd/"
+    assert s.micro_url == "http://micro-cwd/"
 
 
 def test_variables_extra_en_env_son_rechazadas_o_ignoradas(sin_env, tmp_path):
@@ -39,7 +47,7 @@ def test_variables_extra_en_env_son_rechazadas_o_ignoradas(sin_env, tmp_path):
     En pydantic-settings v2 por defecto extra='forbid' para dotenv."""
     from pydantic import ValidationError
     env = tmp_path / ".env"
-    env.write_text("get_catalog_url=u\nkong_auth_key=k\nOTRA_VAR=1\n")
+    env.write_text("get_catalog_url=u\nmicro_url=m\nkong_auth_key=k\nOTRA_VAR=1\n")
     try:
         s = Settings(_env_file=env)
         assert not hasattr(s, "OTRA_VAR")
@@ -49,5 +57,5 @@ def test_variables_extra_en_env_son_rechazadas_o_ignoradas(sin_env, tmp_path):
 
 def test_name_personalizado_desde_env(sin_env, tmp_path):
     env = tmp_path / ".env"
-    env.write_text("get_catalog_url=u\nkong_auth_key=k\nPROJECT_NAME=Barra\n")
+    env.write_text("get_catalog_url=u\nmicro_url=m\nkong_auth_key=k\nPROJECT_NAME=Barra\n")
     assert Settings(_env_file=env).PROJECT_NAME == "Barra"
