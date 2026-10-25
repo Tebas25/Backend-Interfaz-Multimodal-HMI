@@ -1,12 +1,14 @@
 """Integración de HttpRequestService contra un servidor HTTP real local
-(sin mocks): se verifican headers, parámetros, JSON y errores."""
+(sin mocks): se verifican headers, parámetros, JSON y errores.
+
+El servidor corre en un hilo; el cliente es httpx.AsyncClient."""
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
-import requests
 from pydantic import ValidationError
 
 from app.schemas.events_dto import EventsDTO, EventosResponseDTO, TipoEvento
@@ -79,62 +81,92 @@ def base_url():
     servidor.server_close()
 
 
-def test_get_lista_de_eventos(base_url):
-    svc = HttpRequestService(f"{base_url}/get-events", authkey=AUTHKEY)
-    eventos = svc.get(list[EventosResponseDTO], params={"cobot_id": "cobot-1"})
+@pytest.fixture
+async def crear_servicio():
+    """Fábrica de servicios que garantiza cerrar cada cliente httpx."""
+    creados = []
+
+    def _crear(url, authkey=None):
+        svc = HttpRequestService(url, authkey=authkey)
+        creados.append(svc)
+        return svc
+
+    yield _crear
+    for svc in creados:
+        await svc.close()
+
+
+async def test_get_lista_de_eventos(base_url, crear_servicio):
+    svc = crear_servicio(f"{base_url}/get-events", AUTHKEY)
+
+    eventos = await svc.get(list[EventosResponseDTO], params={"cobot_id": "cobot-1"})
+
     assert len(eventos) == 1
     assert isinstance(eventos[0], EventosResponseDTO)
     assert eventos[0].tipo_evento is TipoEvento.WARNING
 
 
-def test_get_envia_header_authkey_y_params(base_url):
-    svc = HttpRequestService(f"{base_url}/get-events", authkey=AUTHKEY)
-    svc.get(
+async def test_get_envia_header_authkey_y_params(base_url, crear_servicio):
+    svc = crear_servicio(f"{base_url}/get-events", AUTHKEY)
+
+    await svc.get(
         list[EventosResponseDTO],
         params={"cobot_id": "cobot-1", "tipo_evento": ["Warning", "ErrorRobot"]},
     )
+
     peticion = Handler.ultima_peticion
     assert peticion["headers"]["authkey"] == AUTHKEY
     assert peticion["query"]["cobot_id"] == ["cobot-1"]
     assert peticion["query"]["tipo_evento"] == ["Warning", "ErrorRobot"]
 
 
-def test_get_sin_authkey_devuelve_401(base_url):
-    svc = HttpRequestService(f"{base_url}/get-events")
-    with pytest.raises(requests.exceptions.HTTPError) as exc:
-        svc.get(list[EventosResponseDTO], params={"cobot_id": "cobot-1"})
+async def test_get_sin_authkey_devuelve_401(base_url, crear_servicio):
+    svc = crear_servicio(f"{base_url}/get-events")
+
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        await svc.get(list[EventosResponseDTO], params={"cobot_id": "cobot-1"})
+
     assert exc.value.response.status_code == 401
 
 
-def test_get_sin_parametro_obligatorio_devuelve_422(base_url):
-    svc = HttpRequestService(f"{base_url}/get-events", authkey=AUTHKEY)
-    with pytest.raises(requests.exceptions.HTTPError) as exc:
-        svc.get(list[EventosResponseDTO])
+async def test_get_sin_parametro_obligatorio_devuelve_422(base_url, crear_servicio):
+    svc = crear_servicio(f"{base_url}/get-events", AUTHKEY)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        await svc.get(list[EventosResponseDTO])
+
     assert exc.value.response.status_code == 422
 
 
-def test_get_ruta_inexistente_devuelve_404(base_url):
-    svc = HttpRequestService(f"{base_url}/nada", authkey=AUTHKEY)
-    with pytest.raises(requests.exceptions.HTTPError) as exc:
-        svc.get(list[EventosResponseDTO])
+async def test_get_ruta_inexistente_devuelve_404(base_url, crear_servicio):
+    svc = crear_servicio(f"{base_url}/nada", AUTHKEY)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        await svc.get(list[EventosResponseDTO])
+
     assert exc.value.response.status_code == 404
 
 
-def test_respuesta_con_forma_inesperada_lanza_validation_error(base_url):
-    svc = HttpRequestService(f"{base_url}/invalido", authkey=AUTHKEY)
+async def test_respuesta_con_forma_inesperada_lanza_validation_error(
+    base_url, crear_servicio
+):
+    svc = crear_servicio(f"{base_url}/invalido", AUTHKEY)
+
     with pytest.raises(ValidationError):
-        svc.get(EventosResponseDTO)
+        await svc.get(EventosResponseDTO)
 
 
-def test_post_envia_json_y_deserializa_respuesta(base_url):
-    svc = HttpRequestService(f"{base_url}/events", authkey=AUTHKEY)
+async def test_post_envia_json_y_deserializa_respuesta(base_url, crear_servicio):
+    svc = crear_servicio(f"{base_url}/events", AUTHKEY)
     dto = EventsDTO(
         cobot_id="cobot-9",
         evento_id="ev-9",
         tipo_evento=TipoEvento.ERROR_ROBOT,
         descripcion="falla de motor",
     )
-    resultado = svc.post(EventosResponseDTO, dto)
+
+    resultado = await svc.post(EventosResponseDTO, dto)
+
     assert Handler.ultima_peticion["body"] == {
         "cobot_id": "cobot-9",
         "evento_id": "ev-9",
@@ -145,16 +177,20 @@ def test_post_envia_json_y_deserializa_respuesta(base_url):
     assert resultado.tipo_evento is TipoEvento.ERROR_ROBOT
 
 
-def test_post_sin_authkey_devuelve_401(base_url):
-    svc = HttpRequestService(f"{base_url}/events")
+async def test_post_sin_authkey_devuelve_401(base_url, crear_servicio):
+    svc = crear_servicio(f"{base_url}/events")
     dto = EventsDTO(
         cobot_id="c", evento_id="e", tipo_evento=TipoEvento.INFO_ROBOT, descripcion="d"
     )
-    with pytest.raises(requests.exceptions.HTTPError):
-        svc.post(EventosResponseDTO, dto)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        await svc.post(EventosResponseDTO, dto)
+
+    assert exc.value.response.status_code == 401
 
 
-def test_conexion_rechazada():
-    svc = HttpRequestService("http://127.0.0.1:1/x")
-    with pytest.raises(requests.exceptions.ConnectionError):
-        svc.get(EventosResponseDTO)
+async def test_conexion_rechazada(crear_servicio):
+    svc = crear_servicio("http://127.0.0.1:1/x")
+
+    with pytest.raises(httpx.ConnectError):
+        await svc.get(EventosResponseDTO)

@@ -2,6 +2,7 @@
 import os
 
 os.environ.setdefault("get_catalog_url", "http://fake-kong/catalog/")
+os.environ.setdefault("micro_url", "http://fake-kong/micro/")
 os.environ.setdefault("kong_auth_key", "test-key")
 
 from decimal import Decimal

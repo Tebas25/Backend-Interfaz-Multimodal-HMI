@@ -1,4 +1,4 @@
-import requests
+import httpx
 from pydantic import BaseModel, TypeAdapter
 from typing import Type, TypeVar
 
@@ -6,19 +6,21 @@ T = TypeVar("T")
 
 
 class HttpRequestService:
-    def __init__(self, url, authkey=None):
+    def __init__(self, url: str, authkey: str | None = None):
         self.url = url
-        self.session = requests.Session()
-        if authkey:
-            self.session.headers["authkey"] = authkey
+        headers = {"authkey": authkey} if authkey else {}
+        self.client = httpx.AsyncClient(headers=headers, timeout=10.0)
 
-    def _request(self, method: str, type: Type[T], **kwargs) -> T:
-        response = self.session.request(method, self.url, timeout=10, **kwargs)
+    async def _request(self, method: str, type: Type[T], **kwargs) -> T:
+        response = await self.client.request(method, self.url, **kwargs)
         response.raise_for_status()
         return TypeAdapter(type).validate_python(response.json())
 
-    def get(self, type: Type[T], **kwargs) -> T:
-        return self._request("GET", type, **kwargs)
+    async def get(self, type: Type[T], **kwargs) -> T:
+        return await self._request("GET", type, **kwargs)
 
-    def post(self, type: Type[T], datos: BaseModel) -> T:
-        return self._request("POST", type, json=datos.model_dump())
+    async def post(self, type: Type[T], datos: BaseModel) -> T:
+        return await self._request("POST", type, json=datos.model_dump())
+
+    async def close(self) -> None:
+        await self.client.aclose()
