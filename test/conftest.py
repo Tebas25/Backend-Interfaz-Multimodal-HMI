@@ -1,4 +1,3 @@
-"""Configuración global de pytest."""
 import os
 
 os.environ.setdefault("get_catalog_url", "http://fake-kong/catalog/")
@@ -10,6 +9,7 @@ from decimal import Decimal
 import pytest
 
 from app.models.cobot_menu_item import CobotMenuItem
+from app.services.screen_state import ScreenState
 
 
 @pytest.fixture
@@ -24,3 +24,9 @@ def make_item():
             codigo_modbus=codigo,
         )
     return _make
+
+@pytest.fixture(autouse=True)
+def reset_screen_state():
+    ScreenState.reset()
+    yield
+    ScreenState.reset()

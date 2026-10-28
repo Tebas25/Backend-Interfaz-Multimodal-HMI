@@ -1,8 +1,3 @@
-"""Integración de la app completa (lifespan real).
-
-Se usan el watcher, el ConnectionManager y el endpoint /ws reales. Solo se
-reemplaza HttpRequestService por una versión falsa que no sale a la red.
-"""
 import time
 from decimal import Decimal
 
@@ -12,7 +7,15 @@ from fastapi.testclient import TestClient
 from app import main
 from app.models.cobot_menu_item import CobotMenuItem
 from app.schemas.get_catalog_dto import CobotCatalogResponse
-from app.schemas.ws_messages import CatalogUpdate
+from app.schemas.ws_messages import (
+    CatalogUpdate,
+    ErrorMessage,
+    FrontState,
+    Screen,
+    StatePayload,
+    StateSource,
+)
+from app.services.screen_state import ScreenState
 
 CATALOGO = CobotCatalogResponse(
     items=[
@@ -30,7 +33,6 @@ CATALOGO = CobotCatalogResponse(
 
 
 class ServicioFalso:
-    """Imita a HttpRequestService: consulta de fecha o descarga de catálogo."""
 
     creados: list["ServicioFalso"] = []
 
@@ -119,3 +121,36 @@ def test_los_servicios_usan_la_authkey_configurada(servicios_falsos):
 def test_root_funciona_con_el_lifespan_activo(servicios_falsos):
     with TestClient(main.app) as client:
         assert client.get("/").json()["status"] == "ok"
+
+
+def _state_json(screen, source, ref=None):
+    return FrontState(
+        payload=StatePayload(screen=screen, source=source, ref=ref)
+    ).model_dump_json()
+
+
+def test_el_estado_que_envia_el_front_llega_a_screen_state_en_la_app_real(servicios_falsos):
+    with TestClient(main.app) as client:
+        assert esperar(lambda: main.app.state.catalog_watcher.catalogo is not None)
+
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()   # snapshot del catálogo
+            ws.send_text(_state_json(Screen.MENU, StateSource.TOUCH))
+
+            assert esperar(lambda: ScreenState.current is Screen.MENU)
+
+    assert ScreenState.source is StateSource.TOUCH
+
+
+def test_un_mensaje_invalido_en_la_app_real_recibe_un_error_sin_romper_el_catalogo(servicios_falsos):
+    with TestClient(main.app) as client:
+        assert esperar(lambda: main.app.state.catalog_watcher.catalogo is not None)
+
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()   # snapshot del catálogo
+            ws.send_text("hola")
+            respuesta = ErrorMessage.model_validate(ws.receive_json())
+
+    assert respuesta.type == "error"
+    assert ScreenState.current is None
+    assert main.app.state.catalog_watcher.catalogo is not None
