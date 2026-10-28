@@ -1,10 +1,5 @@
-"""Pruebas de integración del endpoint /ws.
-
-Se usan el router, el ConnectionManager, el CatalogWatcher y los mensajes
-reales, con un WebSocket real de Starlette. Solo el microservicio del
-catálogo se omite.
-"""
 import time
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,12 +10,17 @@ from app.api.endpoints import ws_router
 from app.schemas.get_catalog_dto import CobotCatalogResponse
 from app.schemas.ws_messages import (
     CatalogUpdate,
+    ErrorMessage,
+    FrontState,
     Navigate,
     NavigatePayload,
     Screen,
+    StatePayload,
+    StateSource,
 )
 from app.services.catalog_watcher_service import CatalogWatcher
 from app.services.connection_manager import ConnectionManager
+from app.services.screen_state import ScreenState
 
 
 def esperar(condicion, timeout=2.0):
@@ -36,6 +36,12 @@ def esperar(condicion, timeout=2.0):
 def cargar_catalogo(watcher, items, fecha):
     watcher.catalogo = CobotCatalogResponse(items=list(items), total=len(items))
     watcher.ultima_actualizacion = fecha
+
+
+def state_json(screen=Screen.MENU, source=StateSource.TOUCH, ref=None) -> str:
+    return FrontState(
+        payload=StatePayload(screen=screen, source=source, ref=ref)
+    ).model_dump_json()
 
 
 @pytest.fixture
@@ -117,7 +123,7 @@ def test_cliente_se_registra_al_conectar_y_se_elimina_al_desconectar(app):
         assert esperar(lambda: len(manager._clients) == 0)
 
 
-# ---------- mensajes ----------
+# ---------- broadcast ----------
 
 def test_broadcast_llega_a_varios_clientes_conectados(app, navegar_al_menu):
     manager = app.state.ws_manager
@@ -133,14 +139,122 @@ def test_broadcast_llega_a_varios_clientes_conectados(app, navegar_al_menu):
     assert r1["id"] == r2["id"] == navegar_al_menu.id
 
 
-def test_los_mensajes_del_cliente_no_cierran_la_conexion(app, navegar_al_menu):
+# ---------- reporte de estado del front (ScreenState) ----------
+
+def test_el_estado_enviado_por_el_front_se_guarda_en_screen_state(app):
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.MENU, StateSource.TOUCH))
+
+        assert esperar(lambda: ScreenState.current is not None)
+
+    assert ScreenState.current is Screen.MENU
+    assert ScreenState.source is StateSource.TOUCH
+    assert ScreenState.ref is None
+    assert ScreenState.updated_at.utcoffset() == timedelta(0)
+
+
+def test_el_estado_con_origen_backend_guarda_la_referencia(app):
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.WELCOME, StateSource.BACKEND, ref="orden-42"))
+
+        assert esperar(lambda: ScreenState.current is not None)
+
+    assert ScreenState.current is Screen.WELCOME
+    assert ScreenState.source is StateSource.BACKEND
+    assert ScreenState.ref == "orden-42"
+
+
+def test_cada_cambio_de_pantalla_reemplaza_al_anterior(app):
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.WELCOME, StateSource.INIT))
+        assert esperar(lambda: ScreenState.current is Screen.WELCOME)
+
+        ws.send_text(state_json(Screen.MENU, StateSource.TOUCH))
+        assert esperar(lambda: ScreenState.current is Screen.MENU)
+
+    assert ScreenState.source is StateSource.TOUCH
+
+
+def test_un_estado_valido_no_recibe_respuesta(app, navegar_al_menu):
     manager = app.state.ws_manager
 
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         assert esperar(lambda: len(manager._clients) == 1)
-        ws.send_text("hola")  # de momento el backend los ignora
+        ws.send_text(state_json())
+        assert esperar(lambda: ScreenState.current is not None)
         client.portal.call(manager.broadcast, navegar_al_menu)
 
         recibido = ws.receive_json()
 
-    assert recibido["id"] == navegar_al_menu.id
+    # Lo primero que llega es el broadcast: el backend no confirma los estados
+    assert recibido["type"] == "navigate"
+
+
+def test_estados_de_varios_clientes_actualizan_el_mismo_estado_global(app):
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws") as ws1, client.websocket_connect("/ws") as ws2:
+            ws1.send_text(state_json(Screen.WELCOME, StateSource.INIT))
+            assert esperar(lambda: ScreenState.current is Screen.WELCOME)
+
+            ws2.send_text(state_json(Screen.MENU, StateSource.TOUCH))
+            assert esperar(lambda: ScreenState.current is Screen.MENU)
+
+
+# ---------- mensajes inválidos ----------
+
+def test_un_mensaje_invalido_recibe_un_error_y_no_cambia_el_estado(app):
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text("hola")
+
+        respuesta = ErrorMessage.model_validate(ws.receive_json())
+
+    assert respuesta.type == "error"
+    assert respuesta.payload.detail
+    assert ScreenState.current is None
+
+
+def test_la_conexion_sigue_viva_despues_de_un_mensaje_invalido(app, navegar_al_menu):
+    manager = app.state.ws_manager
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        assert esperar(lambda: len(manager._clients) == 1)
+        ws.send_text("hola")
+        assert ws.receive_json()["type"] == "error"
+
+        # Sigue conectado: recibe broadcasts y procesa estados válidos
+        client.portal.call(manager.broadcast, navegar_al_menu)
+        assert ws.receive_json()["id"] == navegar_al_menu.id
+
+        ws.send_text(state_json(Screen.MENU, StateSource.TOUCH))
+        assert esperar(lambda: ScreenState.current is Screen.MENU)
+
+
+def test_estado_backend_sin_ref_recibe_el_motivo_del_error(app):
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text('{"type":"state","payload":{"screen":"menu","source":"backend"}}')
+
+        respuesta = ErrorMessage.model_validate(ws.receive_json())
+
+    assert "ref es obligatorio" in respuesta.payload.detail[0]["msg"]
+    assert ScreenState.current is None
+
+
+def test_pantalla_desconocida_recibe_un_error_con_su_ubicacion(app):
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text('{"type":"state","payload":{"screen":"welome","source":"touch"}}')
+
+        respuesta = ErrorMessage.model_validate(ws.receive_json())
+
+    assert respuesta.payload.detail[0]["loc"] == ["payload", "screen"]
+    assert ScreenState.current is None
+
+
+def test_un_mensaje_invalido_no_borra_el_estado_anterior(app):
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.MENU, StateSource.TOUCH))
+        assert esperar(lambda: ScreenState.current is Screen.MENU)
+
+        ws.send_text("hola")
+        assert ws.receive_json()["type"] == "error"
+
+    assert ScreenState.current is Screen.MENU

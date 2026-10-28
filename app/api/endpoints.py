@@ -1,29 +1,23 @@
-from fastapi import HTTPException, APIRouter
+from fastapi import APIRouter
+from pydantic import ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from app.core import core_constants
-from app.core.config import settings
-from app.models.cobot_menu_item import CobotMenuItem
-from app.schemas.get_catalog_dto import CobotCatalogResponse
-from app.schemas.ws_messages import build_catalog_update
-from app.services.http_request_service import HttpRequestService
+from app.schemas.ws_messages import (
+    build_catalog_update,
+    FrontState,
+    client_adapter,
+    ErrorMessage,
+    ErrorPayload,
+)
+from app.services.screen_state import ScreenState
 
-# catalog_router = APIRouter(prefix="/catalog", tags=["catalog"])
 ws_router = APIRouter()
 
 
-# @catalog_router.get("/get-items", response_model=CobotCatalogResponse)
-# async def get_catalog_items():
-#     request_url = f"{settings.get_catalog_url}{core_constants.COBOT_ID}"
-#     http_service = HttpRequestService(request_url, settings.kong_auth_key)
-#     catalog = await http_service.get(CobotCatalogResponse)
-#     if catalog is None:
-#         raise HTTPException(status_code=404, detail="Error al obtener catalogo")
-#     updated_items: list[CobotMenuItem] = []
-#     for item in catalog.items:
-#         if item.estado:
-#             updated_items.append(item)
-#     return CobotCatalogResponse(items=updated_items, total=len(updated_items))
+def handle_client_message(msg) -> None:
+    match msg:
+        case FrontState():
+            ScreenState.update(msg.payload)
 
 
 @ws_router.websocket("/ws")
@@ -40,9 +34,20 @@ async def ws_endpoint(ws: WebSocket):
             await manager.send(ws, snapshot)
 
         while True:
-            # De momento el front no envía nada; esto mantiene la conexión viva
-            # y detecta la desconexión. Aquí se procesarán los mensajes 'state' más adelante.
-            await ws.receive_text()
+            raw = await ws.receive_text()
+            print(f"[WS] recibido: {raw}")
+            try:
+                msg = client_adapter.validate_json(raw)
+            except ValidationError as e:
+                detail = [
+                    {"loc": list(err["loc"]), "msg": err["msg"]} for err in e.errors()
+                ]
+                print(f"[WS] Mensaje inválido del front: {detail}")
+                await manager.send(
+                    ws, ErrorMessage(payload=ErrorPayload(detail=detail))
+                )
+                continue
+            handle_client_message(msg)
     except WebSocketDisconnect:
         pass
     finally:

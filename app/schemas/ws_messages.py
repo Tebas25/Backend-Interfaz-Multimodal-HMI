@@ -24,8 +24,6 @@ class WsModel(BaseModel):
 class Screen(StrEnum):
     MENU = "menu"
     WELCOME = "welcome"
-    # PREPARANDO = "preparando"
-    # LISTO = "listo"
 
 
 class StateSource(StrEnum):

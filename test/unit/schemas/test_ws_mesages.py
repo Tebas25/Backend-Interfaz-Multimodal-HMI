@@ -1,4 +1,3 @@
-"""Pruebas unitarias de los modelos de mensajes del websocket."""
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -202,3 +201,36 @@ def test_build_catalog_update_con_cero_activos_envia_catalogo_vacio(catalogo):
 
     assert msg.payload.catalogo.items == []
     assert msg.payload.catalogo.total == 0
+
+
+# ---------- nombres de pantalla (contrato con el frontend WPF) ----------
+
+def test_screen_tiene_exactamente_los_nombres_que_usa_el_frontend():
+    """NavigationService del front reconoce 'welcome' y 'menu'. Si se añade o
+    renombra una pantalla, hay que cambiar ambos lados y esta prueba."""
+    assert {s.value for s in Screen} == {"menu", "welcome"}
+
+
+@pytest.mark.parametrize("pantalla", ["menu", "welcome"])
+def test_navigate_acepta_las_pantallas_del_frontend(pantalla):
+    msg = server_adapter.validate_python(
+        {"type": "navigate", "payload": {"screen": pantalla}}
+    )
+
+    assert msg.payload.screen.value == pantalla
+
+
+@pytest.mark.parametrize("pantalla", ["menu", "welcome"])
+def test_state_acepta_las_pantallas_del_frontend(pantalla):
+    raw = f'{{"type":"state","payload":{{"screen":"{pantalla}","source":"touch"}}}}'
+
+    msg = client_adapter.validate_json(raw)
+
+    assert msg.payload.screen.value == pantalla
+
+
+def test_state_rechaza_el_nombre_antiguo_con_error_tipografico():
+    raw = '{"type":"state","payload":{"screen":"welome","source":"touch"}}'
+
+    with pytest.raises(ValidationError):
+        client_adapter.validate_json(raw)
