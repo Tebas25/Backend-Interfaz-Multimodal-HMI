@@ -20,7 +20,7 @@ def test_lista_vacia_es_valida():
 def test_items_dict_se_convierte_a_modelo():
     resp = CobotCatalogResponse(
         items=[{"nombre_item": "A", "precio_item": "1", "estado": True,
-                "ingredientes": None, "codigo_modbus": None}],
+                "ingredientes": None, "codigo_modbus": None, "imagen": "http://example.com"}],
         total=1,
     )
     assert isinstance(resp.items[0], CobotMenuItem)

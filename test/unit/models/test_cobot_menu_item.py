@@ -10,7 +10,8 @@ VALID = {
     "precio_item": "5.50",
     "estado": True,
     "ingredientes": "Ron, menta",
-    "codigo_modbus": "0x01",
+    "codigo_modbus": 1,
+    "imagen": "http://example.com"
 }
 
 
