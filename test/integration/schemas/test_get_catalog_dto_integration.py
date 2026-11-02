@@ -17,9 +17,9 @@ def test_parseo_de_payload_externo_tipo_kong():
     payload = {
         "items": [
             {"nombre_item": "Mojito", "precio_item": 5.5, "estado": True,
-             "ingredientes": "Ron", "codigo_modbus": "0x01"},
+             "ingredientes": "Ron", "codigo_modbus": 1, "imagen": "https://example.com"},
             {"nombre_item": "Agua", "precio_item": "1.00", "estado": False,
-             "ingredientes": None, "codigo_modbus": None},
+             "ingredientes": None, "codigo_modbus": None, "imagen": "https://example.com"},
         ],
         "total": 2,
     }

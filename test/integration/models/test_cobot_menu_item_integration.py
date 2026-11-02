@@ -11,7 +11,7 @@ from app.models.cobot_menu_item import CobotMenuItem
 
 def test_from_attributes_con_objeto_orm():
     orm_obj = SimpleNamespace(nombre_item="Margarita", precio_item=Decimal("7.25"),
-                              estado=False, ingredientes=None, codigo_modbus="0x02")
+                              estado=False, ingredientes=None, codigo_modbus=1, imagen="https://example.com")
     item = CobotMenuItem.model_validate(orm_obj)
     assert item.nombre_item == "Margarita"
     assert item.precio_item == Decimal("7.25")
@@ -53,7 +53,7 @@ def test_funciona_como_body_en_fastapi():
     client = TestClient(app)
     ok = client.post("/item", json={"nombre_item": "X", "precio_item": "1.0",
                                     "estado": True, "ingredientes": None,
-                                    "codigo_modbus": None})
+                                    "codigo_modbus": None, "imagen": "http://example.com"})
     bad = client.post("/item", json={"nombre_item": "X"})
     assert ok.status_code == 200
     assert bad.status_code == 422

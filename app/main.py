@@ -7,8 +7,10 @@ from app.api.endpoints import ws_router
 from app.core.config import settings
 from app.core.core_constants import COBOT_ID
 from app.schemas.get_catalog_dto import CobotCatalogResponse
-from app.schemas.ws_messages import build_catalog_update
+from app.schemas.ws_messages import build_catalog_update, Navigate, NavigatePayload
 from app.services.catalog_watcher_service import CatalogWatcher
+from app.services.command_listener_service import CommandListenerService
+from app.services.command_processor import NavigateAction
 from app.services.connection_manager import ConnectionManager
 from app.services.http_request_service import HttpRequestService
 
@@ -38,11 +40,24 @@ async def lifespan(app: FastAPI):
         interval=5,
         on_change=broadcast_catalog,
     )
+
     app.state.catalog_watcher = watcher
     watcher.start()
 
+    async def execute_action(action) -> None:
+        match action:
+            case NavigateAction(screen=screen):
+                await manager.broadcast(
+                    Navigate(payload=NavigatePayload(screen=screen))
+                )
+
+    listener = CommandListenerService(on_action=execute_action)
+    app.state.command_listener = listener
+    await listener.start()
+
     yield
 
+    await listener.stop()
     await watcher.stop()
     await update_svc.close()
     await catalog_svc.close()
@@ -54,7 +69,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-# app.include_router(catalog_router)
+
 app.include_router(ws_router)
 
 

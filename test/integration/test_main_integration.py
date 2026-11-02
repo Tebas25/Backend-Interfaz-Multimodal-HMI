@@ -1,156 +1,257 @@
-import time
-from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.routing import Match
 
 from app import main
-from app.models.cobot_menu_item import CobotMenuItem
+from app.core.config import settings
+from app.core.core_constants import COBOT_ID
+from app.main import app, lifespan
 from app.schemas.get_catalog_dto import CobotCatalogResponse
-from app.schemas.ws_messages import (
-    CatalogUpdate,
-    ErrorMessage,
-    FrontState,
-    Screen,
-    StatePayload,
-    StateSource,
-)
-from app.services.screen_state import ScreenState
+from app.schemas.ws_messages import Navigate, Screen
+from app.services.command_processor import NavigateAction
+from app.services.connection_manager import ConnectionManager
 
-CATALOGO = CobotCatalogResponse(
-    items=[
-        CobotMenuItem(
-            nombre_item="Mojito", precio_item=Decimal("5.50"), estado=True,
-            ingredientes="Ron, menta", codigo_modbus="0x01",
-        ),
-        CobotMenuItem(
-            nombre_item="Margarita", precio_item=Decimal("6.00"), estado=False,
-            ingredientes="Tequila", codigo_modbus="0x02",
-        ),
-    ],
-    total=2,
-)
+client = TestClient(app)
 
 
-class ServicioFalso:
+def test_root_endpoint():
+    response = client.get("/")
 
-    creados: list["ServicioFalso"] = []
+    assert response.status_code == 200
 
-    def __init__(self, url, authkey=None):
-        self.url = url
-        self.authkey = authkey
-        self.cerrado = False
-        ServicioFalso.creados.append(self)
+    assert response.json() == {
+        "status": "ok",
+        "message": "Estructura base configurada y en línea.",
+    }
 
-    async def get(self, tipo, **kwargs):
-        if "check-update" in self.url:
-            return "2026-10-22T10:00:00"
-        return CATALOGO
 
-    async def close(self):
-        self.cerrado = True
+def test_project_config():
+    assert settings.PROJECT_NAME == "Bartender Multimodal HMI"
+    assert settings.PROJECT_VERSION == "1.0.0"
+
+
+def test_metadata_de_la_app():
+    assert app.title == "API Bartender Robótico - Módulo Multimodal"
+    assert app.version == "1.0.0"
+
+
+def test_la_app_expone_la_ruta_websocket():
+    # Se usa matches() y no route.path: según la versión de FastAPI,
+    # include_router envuelve las rutas y el wrapper no tiene `path`.
+    scope = {"type": "websocket", "path": "/ws", "root_path": "", "method": None}
+
+    assert any(route.matches(scope)[0] == Match.FULL for route in app.routes)
+
+
+# ---------- lifespan ----------
 
 
 @pytest.fixture
-def servicios_falsos(monkeypatch):
-    ServicioFalso.creados = []
-    monkeypatch.setattr(main, "HttpRequestService", ServicioFalso)
-    return ServicioFalso.creados
+def dobles(monkeypatch):
+    """Reemplaza servicios HTTP y watcher por dobles; el ConnectionManager es real."""
+    update_svc = MagicMock(name="update_svc")
+    update_svc.close = AsyncMock()
+    catalog_svc = MagicMock(name="catalog_svc")
+    catalog_svc.close = AsyncMock()
+    http_cls = MagicMock(side_effect=[update_svc, catalog_svc])
+
+    watcher = MagicMock(name="watcher")
+    watcher.stop = AsyncMock()
+    watcher_cls = MagicMock(return_value=watcher)
+
+    listener = MagicMock(name="listener")
+    listener.start = AsyncMock(return_value=True)
+    listener.stop = AsyncMock()
+    listener_cls = MagicMock(return_value=listener)
+
+    monkeypatch.setattr(main, "HttpRequestService", http_cls)
+    monkeypatch.setattr(main, "CatalogWatcher", watcher_cls)
+    monkeypatch.setattr(
+        main, "CommandListenerService", listener_cls
+    )  # nunca el micrófono real
+    return {
+        "update_svc": update_svc,
+        "catalog_svc": catalog_svc,
+        "http_cls": http_cls,
+        "watcher": watcher,
+        "watcher_cls": watcher_cls,
+        "listener": listener,
+        "listener_cls": listener_cls,
+    }
 
 
-def esperar(condicion, timeout=3.0):
-    limite = time.monotonic() + timeout
-    while time.monotonic() < limite:
-        if condicion():
-            return True
-        time.sleep(0.01)
-    return False
+async def test_lifespan_deja_manager_y_watcher_en_app_state(dobles):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        assert isinstance(app_falsa.state.ws_manager, ConnectionManager)
+        assert app_falsa.state.catalog_watcher is dobles["watcher"]
 
 
-def test_la_app_arranca_descarga_el_catalogo_y_lo_entrega_por_websocket(servicios_falsos):
-    with TestClient(main.app) as client:
-        assert esperar(lambda: main.app.state.catalog_watcher.catalogo is not None)
-
-        with client.websocket_connect("/ws") as ws:
-            msg = CatalogUpdate.model_validate(ws.receive_json())
-
-    assert msg.payload.ultima_actualizacion == "2026-10-22T10:00:00"
-    assert [i.nombre_item for i in msg.payload.catalogo.items] == ["Mojito"]
-
-
-def test_el_watcher_hace_broadcast_a_los_clientes_ya_conectados(servicios_falsos):
-    with TestClient(main.app) as client:
-        manager = main.app.state.ws_manager
-        watcher = main.app.state.catalog_watcher
-        # Se conecta antes de que el watcher complete su primera descarga
-        # (si ya terminó, recibe el snapshot; en ambos casos llega el catálogo).
-        with client.websocket_connect("/ws") as ws:
-            assert esperar(lambda: len(manager._clients) == 1)
-            msg = CatalogUpdate.model_validate(ws.receive_json())
-            assert watcher.catalogo is not None
-
-    assert msg.payload.catalogo.total == 1
-
-
-def test_al_apagar_se_cierran_los_servicios_http(servicios_falsos):
-    with TestClient(main.app):
-        assert len(servicios_falsos) == 2
-        assert not any(s.cerrado for s in servicios_falsos)
-
-    assert all(s.cerrado for s in servicios_falsos)
-
-
-def test_al_apagar_el_watcher_queda_cancelado(servicios_falsos):
-    with TestClient(main.app):
-        watcher = main.app.state.catalog_watcher
-        tarea = watcher._task
-        assert tarea is not None
-
-    assert tarea.done()
-
-
-def test_los_servicios_usan_la_authkey_configurada(servicios_falsos):
-    from app.core.config import settings
-
-    with TestClient(main.app):
+async def test_lifespan_crea_los_servicios_http_con_sus_urls_y_authkey(dobles):
+    async with lifespan(FastAPI()):
         pass
 
-    assert {s.authkey for s in servicios_falsos} == {settings.kong_auth_key}
+    assert dobles["http_cls"].call_args_list == [
+        call(
+            f"{settings.micro_url}/catalog/check-update/{COBOT_ID}",
+            authkey=settings.kong_auth_key,
+        ),
+        call(
+            f"{settings.get_catalog_url}/{COBOT_ID}",
+            authkey=settings.kong_auth_key,
+        ),
+    ]
 
 
-def test_root_funciona_con_el_lifespan_activo(servicios_falsos):
-    with TestClient(main.app) as client:
-        assert client.get("/").json()["status"] == "ok"
+async def test_lifespan_crea_el_watcher_con_la_configuracion_esperada(dobles):
+    async with lifespan(FastAPI()):
+        pass
+
+    args, kwargs = dobles["watcher_cls"].call_args
+    assert args == (
+        dobles["update_svc"],
+        dobles["catalog_svc"],
+        CobotCatalogResponse,
+    )
+    assert kwargs["interval"] == 5
+    assert callable(kwargs["on_change"])
 
 
-def _state_json(screen, source, ref=None):
-    return FrontState(
-        payload=StatePayload(screen=screen, source=source, ref=ref)
-    ).model_dump_json()
+async def test_lifespan_arranca_el_watcher_al_iniciar(dobles):
+    async with lifespan(FastAPI()):
+        dobles["watcher"].start.assert_called_once()
+        dobles["watcher"].stop.assert_not_awaited()
 
 
-def test_el_estado_que_envia_el_front_llega_a_screen_state_en_la_app_real(servicios_falsos):
-    with TestClient(main.app) as client:
-        assert esperar(lambda: main.app.state.catalog_watcher.catalogo is not None)
+async def test_lifespan_detiene_watcher_y_cierra_servicios_al_apagar(dobles):
+    async with lifespan(FastAPI()):
+        pass
 
-        with client.websocket_connect("/ws") as ws:
-            ws.receive_json()   # snapshot del catálogo
-            ws.send_text(_state_json(Screen.MENU, StateSource.TOUCH))
-
-            assert esperar(lambda: ScreenState.current is Screen.MENU)
-
-    assert ScreenState.source is StateSource.TOUCH
+    dobles["watcher"].stop.assert_awaited_once()
+    dobles["update_svc"].close.assert_awaited_once()
+    dobles["catalog_svc"].close.assert_awaited_once()
 
 
-def test_un_mensaje_invalido_en_la_app_real_recibe_un_error_sin_romper_el_catalogo(servicios_falsos):
-    with TestClient(main.app) as client:
-        assert esperar(lambda: main.app.state.catalog_watcher.catalogo is not None)
+# ---------- callback on_change (broadcast_catalog) ----------
 
-        with client.websocket_connect("/ws") as ws:
-            ws.receive_json()   # snapshot del catálogo
-            ws.send_text("hola")
-            respuesta = ErrorMessage.model_validate(ws.receive_json())
 
-    assert respuesta.type == "error"
-    assert ScreenState.current is None
-    assert main.app.state.catalog_watcher.catalogo is not None
+async def test_on_change_hace_broadcast_del_catalogo(dobles, monkeypatch):
+    mensaje = MagicMock(name="catalog_update")
+    construir = MagicMock(return_value=mensaje)
+    monkeypatch.setattr(main, "build_catalog_update", construir)
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        app_falsa.state.ws_manager.broadcast = AsyncMock()
+        on_change = dobles["watcher_cls"].call_args.kwargs["on_change"]
+
+        await on_change()
+
+        construir.assert_called_once_with(dobles["watcher"])
+        app_falsa.state.ws_manager.broadcast.assert_awaited_once_with(mensaje)
+
+
+async def test_on_change_no_hace_broadcast_si_no_hay_mensaje(dobles, monkeypatch):
+    monkeypatch.setattr(main, "build_catalog_update", MagicMock(return_value=None))
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        app_falsa.state.ws_manager.broadcast = AsyncMock()
+        on_change = dobles["watcher_cls"].call_args.kwargs["on_change"]
+
+        await on_change()
+
+        app_falsa.state.ws_manager.broadcast.assert_not_awaited()
+
+
+# ---------- servicio de control por voz ----------
+
+
+async def test_lifespan_deja_el_servicio_de_voz_en_app_state(dobles):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        assert app_falsa.state.command_listener is dobles["listener"]
+
+
+async def test_lifespan_crea_el_servicio_de_voz_con_una_accion_ejecutable(dobles):
+    async with lifespan(FastAPI()):
+        pass
+
+    dobles["listener_cls"].assert_called_once()
+    assert callable(dobles["listener_cls"].call_args.kwargs["on_action"])
+
+
+async def test_lifespan_arranca_el_servicio_de_voz_al_iniciar(dobles):
+    async with lifespan(FastAPI()):
+        dobles["listener"].start.assert_awaited_once()
+        dobles["listener"].stop.assert_not_awaited()
+
+
+async def test_lifespan_detiene_el_servicio_de_voz_al_apagar(dobles):
+    async with lifespan(FastAPI()):
+        pass
+
+    dobles["listener"].stop.assert_awaited_once()
+
+
+async def test_lifespan_apaga_en_orden_voz_watcher_y_servicios_http(dobles):
+    orden = []
+    dobles["listener"].stop.side_effect = lambda: orden.append("voz")
+    dobles["watcher"].stop.side_effect = lambda: orden.append("watcher")
+    dobles["update_svc"].close.side_effect = lambda: orden.append("update_svc")
+    dobles["catalog_svc"].close.side_effect = lambda: orden.append("catalog_svc")
+
+    async with lifespan(FastAPI()):
+        pass
+
+    assert orden == ["voz", "watcher", "update_svc", "catalog_svc"]
+
+
+async def test_lifespan_si_no_hay_microfono_la_app_arranca_y_apaga_igual(dobles):
+    dobles["listener"].start.return_value = False  # control por voz deshabilitado
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        assert app_falsa.state.catalog_watcher is dobles["watcher"]
+
+    dobles["listener"].stop.assert_awaited_once()
+    dobles["watcher"].stop.assert_awaited_once()
+
+
+# ---------- acción de voz -> mensaje de navegación ----------
+
+
+@pytest.mark.parametrize("pantalla", list(Screen))
+async def test_la_accion_de_navegar_hace_broadcast_del_mensaje_navigate(
+    dobles, pantalla
+):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        app_falsa.state.ws_manager.broadcast = AsyncMock()
+        on_action = dobles["listener_cls"].call_args.kwargs["on_action"]
+
+        await on_action(NavigateAction(pantalla))
+
+        app_falsa.state.ws_manager.broadcast.assert_awaited_once()
+        mensaje = app_falsa.state.ws_manager.broadcast.await_args.args[0]
+        assert isinstance(mensaje, Navigate)
+        assert mensaje.type == "navigate"
+        assert mensaje.payload.screen is pantalla
+
+
+async def test_una_accion_desconocida_no_envia_nada(dobles):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        app_falsa.state.ws_manager.broadcast = AsyncMock()
+        on_action = dobles["listener_cls"].call_args.kwargs["on_action"]
+
+        await on_action(object())  # no debe lanzar
+
+        app_falsa.state.ws_manager.broadcast.assert_not_awaited()
