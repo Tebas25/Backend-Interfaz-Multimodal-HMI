@@ -79,7 +79,7 @@ class CobotService:
                     state = await self.read_status()
                     if state != STATE_IDLE:
                         yield self._translate(state) or self._system_event(
-                            "NOT IDLE", "El cobot no está en reposo"
+                            "NOT_IDLE", "El cobot no está en reposo"
                         )
                         return
 

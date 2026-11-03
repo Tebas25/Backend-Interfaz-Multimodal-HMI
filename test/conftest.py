@@ -2,9 +2,20 @@ import os
 import threading
 from unittest.mock import MagicMock
 
-os.environ.setdefault("get_catalog_url", "http://fake-kong/catalog/")
-os.environ.setdefault("micro_url", "http://fake-kong/micro/")
-os.environ.setdefault("kong_auth_key", "test-key")
+ENV_DE_PRUEBA = {
+    "get_catalog_url": "http://fake-kong/catalog/get",
+    "micro_url": "http://fake-kong/catalog",
+    "kong_auth_key": "test-key",
+    "cobot_host": "127.0.0.1",
+    "cobot_port": "5020",
+    "cobot_slave_id": "1",
+    "modbus_timeout": "2.0",
+    "modbus_retries": "3",
+    "polling_interval": "0.2",
+    "order_timeout": "120",
+    "analytics_events_url": "http://fake-kong/api/v1/analytics/events",
+}
+os.environ.update(ENV_DE_PRUEBA)
 
 from decimal import Decimal
 
@@ -17,8 +28,14 @@ from app.services.screen_state import ScreenState
 
 @pytest.fixture
 def make_item():
-    def _make(nombre="Mojito", precio="5.50", estado=True,
-              ingredientes="Ron, menta", codigo=1, imagen="https://example.com"):
+    def _make(
+        nombre="Mojito",
+        precio="5.50",
+        estado=True,
+        ingredientes="Ron, menta",
+        codigo=1,
+        imagen="https://example.com",
+    ):
         return CobotMenuItem(
             nombre_item=nombre,
             precio_item=Decimal(precio),
@@ -27,7 +44,9 @@ def make_item():
             codigo_modbus=codigo,
             imagen=imagen,
         )
+
     return _make
+
 
 @pytest.fixture(autouse=True)
 def reset_screen_state():

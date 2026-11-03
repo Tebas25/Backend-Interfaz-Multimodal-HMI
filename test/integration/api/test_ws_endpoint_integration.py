@@ -60,6 +60,7 @@ def navegar_al_menu():
 
 # ---------- snapshot al conectar ----------
 
+
 def test_al_conectar_recibe_el_catalogo_actual_solo_con_activos(app, make_item):
     cargar_catalogo(
         app.state.catalog_watcher,
@@ -113,6 +114,7 @@ def test_reconexion_recibe_el_catalogo_actualizado(app, make_item):
 
 # ---------- registro de clientes ----------
 
+
 def test_cliente_se_registra_al_conectar_y_se_elimina_al_desconectar(app):
     manager = app.state.ws_manager
 
@@ -125,11 +127,15 @@ def test_cliente_se_registra_al_conectar_y_se_elimina_al_desconectar(app):
 
 # ---------- broadcast ----------
 
+
 def test_broadcast_llega_a_varios_clientes_conectados(app, navegar_al_menu):
     manager = app.state.ws_manager
 
     with TestClient(app) as client:
-        with client.websocket_connect("/ws") as ws1, client.websocket_connect("/ws") as ws2:
+        with (
+            client.websocket_connect("/ws") as ws1,
+            client.websocket_connect("/ws") as ws2,
+        ):
             assert esperar(lambda: len(manager._clients) == 2)
             client.portal.call(manager.broadcast, navegar_al_menu)
 
@@ -140,6 +146,7 @@ def test_broadcast_llega_a_varios_clientes_conectados(app, navegar_al_menu):
 
 
 # ---------- reporte de estado del front (ScreenState) ----------
+
 
 def test_el_estado_enviado_por_el_front_se_guarda_en_screen_state(app):
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
@@ -192,7 +199,10 @@ def test_un_estado_valido_no_recibe_respuesta(app, navegar_al_menu):
 
 def test_estados_de_varios_clientes_actualizan_el_mismo_estado_global(app):
     with TestClient(app) as client:
-        with client.websocket_connect("/ws") as ws1, client.websocket_connect("/ws") as ws2:
+        with (
+            client.websocket_connect("/ws") as ws1,
+            client.websocket_connect("/ws") as ws2,
+        ):
             ws1.send_text(state_json(Screen.WELCOME, StateSource.INIT))
             assert esperar(lambda: ScreenState.current is Screen.WELCOME)
 
@@ -201,6 +211,7 @@ def test_estados_de_varios_clientes_actualizan_el_mismo_estado_global(app):
 
 
 # ---------- mensajes inválidos ----------
+
 
 def test_un_mensaje_invalido_recibe_un_error_y_no_cambia_el_estado(app):
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
@@ -245,7 +256,7 @@ def test_pantalla_desconocida_recibe_un_error_con_su_ubicacion(app):
 
         respuesta = ErrorMessage.model_validate(ws.receive_json())
 
-    assert respuesta.payload.detail[0]["loc"] == ["payload", "screen"]
+    assert respuesta.payload.detail[0]["loc"] == ["state", "payload", "screen"]
     assert ScreenState.current is None
 
 
