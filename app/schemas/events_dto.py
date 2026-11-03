@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from enum import Enum
 
 
@@ -23,5 +23,15 @@ class EventosResponseDTO(BaseModel):
     cobot_id: str
     fecha: datetime
     evento_id: str
+    tipo_evento: TipoEvento
+    descripcion: str
+
+
+class DrinkOrderRequestDto(BaseModel):
+    codigo_modbus: int
+
+
+class CobotStatusResponseDto(BaseModel):
+    codigo: int
     tipo_evento: TipoEvento
     descripcion: str

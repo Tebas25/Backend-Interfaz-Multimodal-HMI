@@ -9,10 +9,12 @@ from app import main
 from app.core.config import settings
 from app.core.core_constants import COBOT_ID
 from app.main import app, lifespan
+from app.schemas.events_dto import TipoEvento
 from app.schemas.get_catalog_dto import CobotCatalogResponse
 from app.schemas.ws_messages import Navigate, Screen
 from app.services.command_processor import NavigateAction
 from app.services.connection_manager import ConnectionManager
+from app.services.order_service import OrderService
 
 # Sin `with`, TestClient no ejecuta el lifespan: no se arranca el watcher.
 client = TestClient(app)
@@ -57,12 +59,22 @@ def test_la_app_expone_la_ruta_websocket():
 
 @pytest.fixture
 def dobles(monkeypatch):
-    """Reemplaza servicios HTTP y watcher por dobles; el ConnectionManager es real."""
+    """Reemplaza servicios HTTP, publicador, watcher y voz por dobles.
+
+    El ConnectionManager y el OrderService son reales: no tocan red ni hardware.
+    """
     update_svc = MagicMock(name="update_svc")
     update_svc.close = AsyncMock()
     catalog_svc = MagicMock(name="catalog_svc")
     catalog_svc.close = AsyncMock()
-    http_cls = MagicMock(side_effect=[update_svc, catalog_svc])
+    analytics_svc = MagicMock(name="analytics_svc")
+    analytics_svc.close = AsyncMock()
+    # El lifespan crea tres clientes HTTP, en este orden
+    http_cls = MagicMock(side_effect=[update_svc, catalog_svc, analytics_svc])
+
+    publisher = MagicMock(name="publisher")
+    publisher.stop = AsyncMock()
+    publisher_cls = MagicMock(return_value=publisher)
 
     watcher = MagicMock(name="watcher")
     watcher.stop = AsyncMock()
@@ -74,6 +86,7 @@ def dobles(monkeypatch):
     listener_cls = MagicMock(return_value=listener)
 
     monkeypatch.setattr(main, "HttpRequestService", http_cls)
+    monkeypatch.setattr(main, "EventPublisher", publisher_cls)
     monkeypatch.setattr(main, "CatalogWatcher", watcher_cls)
     monkeypatch.setattr(
         main, "CommandListenerService", listener_cls
@@ -81,7 +94,10 @@ def dobles(monkeypatch):
     return {
         "update_svc": update_svc,
         "catalog_svc": catalog_svc,
+        "analytics_svc": analytics_svc,
         "http_cls": http_cls,
+        "publisher": publisher,
+        "publisher_cls": publisher_cls,
         "watcher": watcher,
         "watcher_cls": watcher_cls,
         "listener": listener,
@@ -103,11 +119,15 @@ async def test_lifespan_crea_los_servicios_http_con_sus_urls_y_authkey(dobles):
 
     assert dobles["http_cls"].call_args_list == [
         call(
-            f"{settings.micro_url}/catalog/check-update/{COBOT_ID}",
+            f"{settings.micro_url}/check-update/{COBOT_ID}",
             authkey=settings.kong_auth_key,
         ),
         call(
             f"{settings.get_catalog_url}/{COBOT_ID}",
+            authkey=settings.kong_auth_key,
+        ),
+        call(
+            settings.analytics_events_url,
             authkey=settings.kong_auth_key,
         ),
     ]
@@ -140,6 +160,56 @@ async def test_lifespan_detiene_watcher_y_cierra_servicios_al_apagar(dobles):
     dobles["watcher"].stop.assert_awaited_once()
     dobles["update_svc"].close.assert_awaited_once()
     dobles["catalog_svc"].close.assert_awaited_once()
+
+
+# ---------- publicador de eventos hacia analítica ----------
+
+
+async def test_lifespan_crea_el_publicador_con_el_cliente_de_analitica(dobles):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        dobles["publisher_cls"].assert_called_once_with(dobles["analytics_svc"])
+        dobles["publisher"].start.assert_called_once()
+        assert app_falsa.state.event_publisher is dobles["publisher"]
+
+
+async def test_lifespan_publica_un_evento_de_sistema_al_iniciar(dobles):
+    async with lifespan(FastAPI()):
+        dobles["publisher"].publish.assert_called_once()
+        evento = dobles["publisher"].publish.call_args.args[0]
+
+    assert evento.evento_id == "SYS_START"
+    assert evento.cobot_id == COBOT_ID
+    assert evento.tipo_evento is TipoEvento.INFO_SISTEMA
+
+
+async def test_lifespan_publica_un_evento_de_sistema_al_apagar(dobles):
+    async with lifespan(FastAPI()):
+        pass
+
+    ultimo = dobles["publisher"].publish.call_args_list[-1].args[0]
+    assert ultimo.evento_id == "SYS_STOP"
+    assert ultimo.tipo_evento is TipoEvento.INFO_SISTEMA
+
+
+async def test_lifespan_vacia_el_publicador_y_cierra_su_cliente_al_apagar(dobles):
+    async with lifespan(FastAPI()):
+        dobles["publisher"].stop.assert_not_awaited()
+        dobles["analytics_svc"].close.assert_not_awaited()
+
+    dobles["publisher"].stop.assert_awaited_once()
+    dobles["analytics_svc"].close.assert_awaited_once()
+
+
+# ---------- pedidos al cobot ----------
+
+
+async def test_lifespan_deja_el_servicio_de_pedidos_en_app_state(dobles):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        assert isinstance(app_falsa.state.order_service, OrderService)
 
 
 # ---------- callback on_change (broadcast_catalog) ----------
@@ -205,8 +275,10 @@ async def test_lifespan_detiene_el_servicio_de_voz_al_apagar(dobles):
     dobles["listener"].stop.assert_awaited_once()
 
 
-async def test_lifespan_apaga_en_orden_voz_watcher_y_servicios_http(dobles):
+async def test_lifespan_apaga_en_orden_publicador_voz_watcher_y_servicios_http(dobles):
     orden = []
+    dobles["publisher"].stop.side_effect = lambda: orden.append("publicador")
+    dobles["analytics_svc"].close.side_effect = lambda: orden.append("analitica")
     dobles["listener"].stop.side_effect = lambda: orden.append("voz")
     dobles["watcher"].stop.side_effect = lambda: orden.append("watcher")
     dobles["update_svc"].close.side_effect = lambda: orden.append("update_svc")
@@ -215,7 +287,14 @@ async def test_lifespan_apaga_en_orden_voz_watcher_y_servicios_http(dobles):
     async with lifespan(FastAPI()):
         pass
 
-    assert orden == ["voz", "watcher", "update_svc", "catalog_svc"]
+    assert orden == [
+        "publicador",  # vacía la cola antes de cerrar su cliente HTTP
+        "analitica",
+        "voz",
+        "watcher",
+        "update_svc",
+        "catalog_svc",
+    ]
 
 
 async def test_lifespan_si_no_hay_microfono_la_app_arranca_y_apaga_igual(dobles):
