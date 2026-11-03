@@ -5,6 +5,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from app.schemas.ws_messages import (
     build_catalog_update,
     FrontState,
+    OrderRequest,
     client_adapter,
     ErrorMessage,
     ErrorPayload,
@@ -14,10 +15,19 @@ from app.services.screen_state import ScreenState
 ws_router = APIRouter()
 
 
-def handle_client_message(msg) -> None:
+async def handle_client_message(msg, ws: WebSocket) -> None:
     match msg:
         case FrontState():
             ScreenState.update(msg.payload)
+        case OrderRequest():
+            error = ws.app.state.order_service.request_order(msg.payload.nombre_item)
+            if error:
+                await ws.app.state.ws_manager.send(
+                    ws,
+                    ErrorMessage(
+                        payload=ErrorPayload(detail=[{"loc": ["order"], "msg": error}])
+                    ),
+                )
 
 
 @ws_router.websocket("/ws")
@@ -47,7 +57,7 @@ async def ws_endpoint(ws: WebSocket):
                     ws, ErrorMessage(payload=ErrorPayload(detail=detail))
                 )
                 continue
-            handle_client_message(msg)
+            await handle_client_message(msg, ws)
     except WebSocketDisconnect:
         pass
     finally:

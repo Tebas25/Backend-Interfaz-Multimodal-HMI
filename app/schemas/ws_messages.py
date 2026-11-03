@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from app.schemas.get_catalog_dto import CobotCatalogResponse
+from app.schemas.events_dto import TipoEvento
 
 # ---------- Base y enums ----------
 
@@ -74,6 +75,23 @@ ServerMessage = Annotated[
 ]
 
 
+class CobotStatusPayload(WsModel):
+    codigo: int
+    tipo_evento: TipoEvento
+    descripcion: str
+
+
+class CobotStatus(Envelope):
+    type: Literal["cobot_status"] = "cobot_status"
+    payload: CobotStatusPayload
+
+
+ServerMessage = Annotated[
+    Union[CatalogUpdate, Navigate, ErrorMessage, CobotStatus],
+    Field(discriminator="type"),
+]
+
+
 # ---------- Front -> Backend ----------
 
 
@@ -96,9 +114,17 @@ class FrontState(Envelope):
     payload: StatePayload
 
 
-# Hoy hay un solo tipo de mensaje del front. Cuando añadas otro:
-# ClientMessage = Annotated[Union[FrontState, OtroMensaje], Field(discriminator="type")]
-ClientMessage = FrontState
+# Front -> Backend
+class OrderPayload(WsModel):
+    nombre_item: str
+
+
+class OrderRequest(Envelope):
+    type: Literal["order"] = "order"
+    payload: OrderPayload
+
+
+ClientMessage = Annotated[Union[FrontState, OrderRequest], Field(discriminator="type")]
 client_adapter = TypeAdapter(ClientMessage)
 
 

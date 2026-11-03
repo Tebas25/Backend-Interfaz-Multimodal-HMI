@@ -38,7 +38,7 @@ class CobotService:
             if response.isError():
                 return CONNECTION_LOST_CODE
             return None
-        except ModbusException, asyncio.TimeoutError, OSError:
+        except (ModbusException, asyncio.TimeoutError, OSError):
             self.modbus_connection.close()
             return CONNECTION_LOST_CODE
 
@@ -52,7 +52,7 @@ class CobotService:
             if response.isError():
                 return CONNECTION_LOST_CODE
             return response.registers[0]
-        except ModbusException, asyncio.TimeoutError, OSError:
+        except (ModbusException, asyncio.TimeoutError, OSError):
             self.modbus_connection.close()
             return CONNECTION_LOST_CODE
 
@@ -123,3 +123,6 @@ class CobotService:
                 yield self._system_event(
                     "TIMEOUT", "El pedido excedió el tiempo máximo"
                 )
+
+
+cobot_service = CobotService()

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     modbus_retries: int
     polling_interval: float
     order_timeout: float
+    analytics_events_url: str
 
     model_config = {"env_file": ".env"}
 
