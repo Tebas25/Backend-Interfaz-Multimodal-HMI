@@ -42,6 +42,7 @@ def test_valores_por_defecto(on_action):
     assert servicio._on_action is on_action
     assert servicio._language == "es-EC"
     assert servicio._phrase_time_limit == 6.0
+    assert servicio._get_items() == ()
 
 
 def test_acepta_idioma_y_limite_de_frase_personalizados(on_action):
@@ -226,7 +227,7 @@ async def test_stop_se_puede_llamar_dos_veces(listener):
     await listener.start()
 
     await listener.stop()
-    await listener.stop()  # no debe lanzar
+    await listener.stop()
 
 
 # ---------- _on_audio / _enqueue ----------
@@ -235,7 +236,7 @@ async def test_stop_se_puede_llamar_dos_veces(listener):
 async def test_on_audio_sin_bucle_descarta_el_audio(on_action):
     servicio = CommandListenerService(on_action=on_action)
 
-    servicio._on_audio(None, "audio-1")  # no debe lanzar
+    servicio._on_audio(None, "audio-1")
 
     assert servicio._queue.empty()
 
@@ -246,7 +247,7 @@ async def test_on_audio_desde_otro_hilo_encola_el_audio_en_el_bucle(on_action):
 
     await asyncio.to_thread(
         servicio._on_audio, None, "audio-1"
-    )  # como hace speech_recognition
+    )
     llego = await esperar_hasta(lambda: not servicio._queue.empty())
 
     assert llego
@@ -468,7 +469,7 @@ async def test_handle_text_entrega_el_texto_y_la_pantalla_a_process_text(
 
     await servicio.handle_text("algo que dijo")
 
-    process.assert_called_once_with("algo que dijo", Screen.MENU)
+    process.assert_called_once_with("algo que dijo", Screen.MENU, ())
 
 
 async def test_handle_text_ejecuta_la_accion_que_devuelve_process_text(
@@ -476,7 +477,7 @@ async def test_handle_text_ejecuta_la_accion_que_devuelve_process_text(
 ):
     accion = NavigateAction(Screen.WELCOME)
     monkeypatch.setattr(
-        command_listener_service, "process_text", lambda texto, pantalla: accion
+        command_listener_service, "process_text", lambda texto, pantalla, items: accion
     )
     servicio = CommandListenerService(on_action=on_action)
 
@@ -491,9 +492,62 @@ async def test_handle_text_si_la_accion_falla_no_propaga_el_error_y_lo_informa(c
         on_action=AsyncMock(side_effect=RuntimeError("falla"))
     )
 
-    await servicio.handle_text("Rony quiero tomar algo")
+    await servicio.handle_text("Rony quiero tomar algo")  # no debe lanzar
 
     assert (
         "[Voz] Error ejecutando la acción: RuntimeError: falla"
         in capsys.readouterr().out
     )
+
+
+# ---------- bebidas disponibles (get_items) ----------
+
+
+async def test_handle_text_entrega_las_bebidas_actuales_a_process_text(
+    monkeypatch, on_action
+):
+    bebidas = [object(), object()]
+    process = MagicMock(return_value=None)
+    monkeypatch.setattr(command_listener_service, "process_text", process)
+    ScreenState.current = Screen.MENU
+    servicio = CommandListenerService(on_action=on_action, get_items=lambda: bebidas)
+
+    await servicio.handle_text("Rony un mojito")
+
+    process.assert_called_once_with("Rony un mojito", Screen.MENU, bebidas)
+
+
+async def test_handle_text_consulta_las_bebidas_en_cada_frase(monkeypatch, on_action):
+    process = MagicMock(return_value=None)
+    monkeypatch.setattr(command_listener_service, "process_text", process)
+    catalogo = [1]
+    servicio = CommandListenerService(on_action=on_action, get_items=lambda: catalogo)
+
+    await servicio.handle_text("primera")
+    catalogo = [1, 2]
+    await servicio.handle_text("segunda")
+
+    assert process.call_args_list[0].args[2] == [1]
+    assert process.call_args_list[1].args[2] == [1, 2]
+
+
+async def test_handle_text_con_bebidas_reales_selecciona_la_nombrada(on_action):
+    from decimal import Decimal
+
+    from app.models.cobot_menu_item import CobotMenuItem
+    from app.services.command_processor import SelectDrinkAction
+
+    mojito = CobotMenuItem(
+        nombre_item="Mojito",
+        ingredientes=None,
+        imagen=None,
+        codigo_modbus=1,
+        estado=True,
+        precio_item=Decimal("5.50"),
+    )
+    ScreenState.current = Screen.MENU
+    servicio = CommandListenerService(on_action=on_action, get_items=lambda: [mojito])
+
+    await servicio.handle_text("Rony quiero un mojito")
+
+    on_action.assert_awaited_once_with(SelectDrinkAction("Mojito"))

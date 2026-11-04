@@ -119,7 +119,7 @@ async def test_lifespan_crea_los_servicios_http_con_sus_urls_y_authkey(dobles):
 
     assert dobles["http_cls"].call_args_list == [
         call(
-            f"{settings.micro_url}/check-update/{COBOT_ID}",
+            f"{settings.micro_url}catalog/check-update/{COBOT_ID}",
             authkey=settings.kong_auth_key,
         ),
         call(

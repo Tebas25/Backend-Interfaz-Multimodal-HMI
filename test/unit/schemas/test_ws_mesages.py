@@ -1,20 +1,30 @@
+"""Pruebas unitarias de los modelos de mensajes del websocket."""
+
 from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from app.schemas.events_dto import TipoEvento
 from app.schemas.get_catalog_dto import CobotCatalogResponse
 from app.schemas.ws_messages import (
     CatalogUpdate,
     CatalogUpdatePayload,
+    CloseIngredients,
+    CobotStatus,
+    CobotStatusPayload,
+    DrinkRefPayload,
+    EmptyPayload,
     ErrorMessage,
     ErrorPayload,
     FrontState,
     Navigate,
     NavigatePayload,
     Screen,
+    SelectDrink,
     ServerMessage,
+    ShowIngredients,
     StatePayload,
     StateSource,
     build_catalog_update,
@@ -31,6 +41,7 @@ def catalogo(make_item):
 
 
 # ---------- Envelope ----------
+
 
 def test_envelope_genera_id_unico_en_hex():
     a = Navigate(payload=NavigatePayload(screen=Screen.MENU))
@@ -59,6 +70,7 @@ def test_screen_invalida_es_rechazada():
 
 
 # ---------- StatePayload ----------
+
 
 def test_state_backend_con_ref_es_valido():
     p = StatePayload(screen=Screen.MENU, source=StateSource.BACKEND, ref="abc")
@@ -91,6 +103,7 @@ def test_state_con_ref_es_invalido_para_touch_e_init(source):
 
 # ---------- client_adapter (Front -> Backend) ----------
 
+
 def test_client_adapter_parsea_un_state_valido():
     raw = '{"type":"state","payload":{"screen":"menu","source":"touch"}}'
 
@@ -119,6 +132,7 @@ def test_client_adapter_rechaza_json_malformado():
 
 
 # ---------- ServerMessage (Backend -> Front) ----------
+
 
 def test_server_message_discrimina_navigate():
     msg = server_adapter.validate_python(
@@ -171,6 +185,7 @@ def test_error_message_se_construye_con_detalle():
 
 # ---------- build_catalog_update ----------
 
+
 def _watcher(catalogo, fecha, activos):
     return SimpleNamespace(
         catalogo=catalogo, ultima_actualizacion=fecha, items_activos=activos
@@ -205,13 +220,14 @@ def test_build_catalog_update_con_cero_activos_envia_catalogo_vacio(catalogo):
 
 # ---------- nombres de pantalla (contrato con el frontend WPF) ----------
 
+
 def test_screen_tiene_exactamente_los_nombres_que_usa_el_frontend():
-    """NavigationService del front reconoce 'welcome' y 'menu'. Si se añade o
+    """NavigationService del front reconoce 'welcome', 'menu' y 'payment'. Si se añade o
     renombra una pantalla, hay que cambiar ambos lados y esta prueba."""
-    assert {s.value for s in Screen} == {"menu", "welcome"}
+    assert {s.value for s in Screen} == {"menu", "welcome", "payment"}
 
 
-@pytest.mark.parametrize("pantalla", ["menu", "welcome"])
+@pytest.mark.parametrize("pantalla", ["menu", "welcome", "payment"])
 def test_navigate_acepta_las_pantallas_del_frontend(pantalla):
     msg = server_adapter.validate_python(
         {"type": "navigate", "payload": {"screen": pantalla}}
@@ -220,7 +236,7 @@ def test_navigate_acepta_las_pantallas_del_frontend(pantalla):
     assert msg.payload.screen.value == pantalla
 
 
-@pytest.mark.parametrize("pantalla", ["menu", "welcome"])
+@pytest.mark.parametrize("pantalla", ["menu", "welcome", "payment"])
 def test_state_acepta_las_pantallas_del_frontend(pantalla):
     raw = f'{{"type":"state","payload":{{"screen":"{pantalla}","source":"touch"}}}}'
 
@@ -234,3 +250,109 @@ def test_state_rechaza_el_nombre_antiguo_con_error_tipografico():
 
     with pytest.raises(ValidationError):
         client_adapter.validate_json(raw)
+
+
+# ---------- Mensajes de voz: select_drink / show_ingredients / close_ingredients
+
+
+@pytest.mark.parametrize(
+    "clase, tipo",
+    [(SelectDrink, "select_drink"), (ShowIngredients, "show_ingredients")],
+)
+def test_mensajes_de_bebida_llevan_su_tipo_y_el_nombre(clase, tipo):
+    msg = clase(payload=DrinkRefPayload(name="Piña colada"))
+
+    datos = msg.model_dump(mode="json")
+
+    assert datos["type"] == tipo
+    assert datos["payload"] == {"name": "Piña colada"}
+
+
+@pytest.mark.parametrize("clase", [SelectDrink, ShowIngredients])
+def test_mensajes_de_bebida_tienen_id_y_fecha_como_todo_sobre(clase):
+    msg = clase(payload=DrinkRefPayload(name="Mojito"))
+
+    assert len(msg.id) == 32
+    assert msg.ts.utcoffset().total_seconds() == 0
+
+
+@pytest.mark.parametrize("clase", [SelectDrink, ShowIngredients])
+def test_mensajes_de_bebida_exigen_el_nombre(clase):
+    with pytest.raises(ValidationError):
+        clase.model_validate({"payload": {}})
+    with pytest.raises(ValidationError):
+        clase.model_validate({})
+
+
+@pytest.mark.parametrize("clase", [SelectDrink, ShowIngredients])
+def test_mensajes_de_bebida_rechazan_campos_extra(clase):
+    with pytest.raises(ValidationError):
+        clase.model_validate({"payload": {"name": "Mojito", "precio": 5}})
+
+
+@pytest.mark.parametrize("clase", [SelectDrink, ShowIngredients])
+def test_mensajes_de_bebida_ida_y_vuelta_json(clase):
+    original = clase(payload=DrinkRefPayload(name="Mojito"))
+
+    copia = clase.model_validate_json(original.model_dump_json())
+
+    assert copia == original
+
+
+def test_el_tipo_de_un_mensaje_de_bebida_no_se_puede_cambiar_por_otro():
+    with pytest.raises(ValidationError):
+        SelectDrink.model_validate(
+            {"type": "show_ingredients", "payload": {"name": "Mojito"}}
+        )
+
+
+def test_close_ingredients_no_necesita_datos():
+    msg = CloseIngredients()
+
+    datos = msg.model_dump(mode="json")
+
+    assert datos["type"] == "close_ingredients"
+    assert datos["payload"] == {}
+    assert isinstance(msg.payload, EmptyPayload)
+
+
+def test_close_ingredients_acepta_payload_vacio_y_rechaza_datos():
+    assert CloseIngredients.model_validate({"payload": {}}).payload == EmptyPayload()
+    with pytest.raises(ValidationError):
+        CloseIngredients.model_validate({"payload": {"name": "Mojito"}})
+
+
+def test_empty_payload_rechaza_campos_extra():
+    with pytest.raises(ValidationError):
+        EmptyPayload.model_validate({"x": 1})
+
+
+def test_cada_mensaje_nuevo_genera_su_propio_id():
+    assert CloseIngredients().id != CloseIngredients().id
+
+
+@pytest.mark.parametrize(
+    "mensaje",
+    [
+        {"type": "select_drink", "payload": {"name": "Mojito"}},
+        {"type": "show_ingredients", "payload": {"name": "Mojito"}},
+        {"type": "close_ingredients", "payload": {}},
+    ],
+)
+def test_server_message_incluye_los_mensajes_de_bebida(mensaje):
+    assert server_adapter.validate_python(mensaje).type == mensaje["type"]
+
+
+def test_server_message_incluye_cobot_status():
+    original = CobotStatus(
+        payload=CobotStatusPayload(
+            codigo=1,
+            tipo_evento=next(iter(TipoEvento)),  # cualquier tipo de evento válido
+            descripcion="ok",
+        )
+    )
+
+    recibido = server_adapter.validate_python(original.model_dump(mode="json"))
+
+    assert isinstance(recibido, CobotStatus)
+    assert recibido == original
