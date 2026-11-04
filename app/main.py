@@ -7,10 +7,23 @@ from app.api.endpoints import ws_router
 from app.core.config import settings
 from app.core.core_constants import COBOT_ID
 from app.schemas.get_catalog_dto import CobotCatalogResponse
-from app.schemas.ws_messages import build_catalog_update, Navigate, NavigatePayload
+from app.schemas.ws_messages import (
+    build_catalog_update,
+    Navigate,
+    NavigatePayload,
+    SelectDrink,
+    DrinkRefPayload,
+    ShowIngredients,
+    CloseIngredients,
+)
 from app.services.catalog_watcher_service import CatalogWatcher
 from app.services.command_listener_service import CommandListenerService
-from app.services.command_processor import NavigateAction
+from app.services.command_processor import (
+    NavigateAction,
+    SelectDrinkAction,
+    ShowIngredientsAction,
+    CloseIngredientsAction,
+)
 from app.services.connection_manager import ConnectionManager
 from app.services.http_request_service import HttpRequestService
 from app.client.session import modbus_connection
@@ -26,7 +39,7 @@ async def lifespan(app: FastAPI):
     app.state.ws_manager = manager
 
     update_svc = HttpRequestService(
-        f"{settings.micro_url}/check-update/{COBOT_ID}",
+        f"{settings.micro_url}catalog/check-update/{COBOT_ID}",
         authkey=settings.kong_auth_key,
     )
     catalog_svc = HttpRequestService(
@@ -74,8 +87,19 @@ async def lifespan(app: FastAPI):
                 await manager.broadcast(
                     Navigate(payload=NavigatePayload(screen=screen))
                 )
+            case SelectDrinkAction(name=name):
+                await manager.broadcast(SelectDrink(payload=DrinkRefPayload(name=name)))
+            case ShowIngredientsAction(name=name):
+                await manager.broadcast(
+                    ShowIngredients(payload=DrinkRefPayload(name=name))
+                )
+            case CloseIngredientsAction():
+                await manager.broadcast(CloseIngredients())
 
-    listener = CommandListenerService(on_action=execute_action)
+    listener = CommandListenerService(
+        on_action=execute_action,
+        get_items=lambda: watcher.items_activos,
+    )
     app.state.command_listener = listener
     await listener.start()
 

@@ -22,9 +22,14 @@ class WsModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class EmptyPayload(WsModel):
+    pass
+
+
 class Screen(StrEnum):
     MENU = "menu"
     WELCOME = "welcome"
+    PAYMENT = "payment"
 
 
 class StateSource(StrEnum):
@@ -39,6 +44,23 @@ class Envelope(WsModel):
 
 
 # ---------- Backend -> Front ----------
+class DrinkRefPayload(WsModel):
+    name: str
+
+
+class SelectDrink(Envelope):
+    type: Literal["select_drink"] = "select_drink"
+    payload: DrinkRefPayload
+
+
+class ShowIngredients(Envelope):
+    type: Literal["show_ingredients"] = "show_ingredients"
+    payload: DrinkRefPayload
+
+
+class CloseIngredients(Envelope):
+    type: Literal["close_ingredients"] = "close_ingredients"
+    payload: EmptyPayload = Field(default_factory=EmptyPayload)
 
 
 class CatalogUpdatePayload(WsModel):
@@ -69,12 +91,6 @@ class ErrorMessage(Envelope):
     payload: ErrorPayload
 
 
-ServerMessage = Annotated[
-    Union[CatalogUpdate, Navigate, ErrorMessage],
-    Field(discriminator="type"),
-]
-
-
 class CobotStatusPayload(WsModel):
     codigo: int
     tipo_evento: TipoEvento
@@ -87,7 +103,15 @@ class CobotStatus(Envelope):
 
 
 ServerMessage = Annotated[
-    Union[CatalogUpdate, Navigate, ErrorMessage, CobotStatus],
+    Union[
+        CatalogUpdate,
+        Navigate,
+        ErrorMessage,
+        CobotStatus,
+        SelectDrink,
+        ShowIngredients,
+        CloseIngredients,
+    ],
     Field(discriminator="type"),
 ]
 

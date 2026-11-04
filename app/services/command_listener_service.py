@@ -1,8 +1,9 @@
 import asyncio
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Sequence
 
 import speech_recognition as sr
 
+from app.models.cobot_menu_item import CobotMenuItem
 from app.services.command_processor import VoiceAction, process_text
 from app.services.screen_state import ScreenState
 
@@ -11,10 +12,12 @@ class CommandListenerService:
     def __init__(
         self,
         on_action: Callable[[VoiceAction], Awaitable[None]],
+        get_items: Callable[[], Sequence[CobotMenuItem]] = lambda: (),
         language: str = "es-EC",
         phrase_time_limit: float = 6.0,
     ):
         self._on_action = on_action
+        self._get_items = get_items
         self._language = language
         self._phrase_time_limit = phrase_time_limit
         self._recognizer = sr.Recognizer()
@@ -81,7 +84,7 @@ class CommandListenerService:
 
     async def handle_text(self, text: str) -> None:
         print(f"[Voz] Escuché: {text!r}")
-        action = process_text(text, ScreenState.current)
+        action = process_text(text, ScreenState.current, self._get_items())
         if action is None:
             return
         print(f"[Voz] Acción: {action}")
