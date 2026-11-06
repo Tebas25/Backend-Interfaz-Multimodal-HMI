@@ -14,6 +14,8 @@ ENV_DE_PRUEBA = {
     "polling_interval": "0.2",
     "order_timeout": "120",
     "analytics_events_url": "http://fake-kong/api/v1/analytics/events",
+    "PUBLIC_BASE_URL": "http://192.168.0.10:8888",
+    "PAYMENT_TTL_SECONDS": "120",
 }
 os.environ.update(ENV_DE_PRUEBA)
 

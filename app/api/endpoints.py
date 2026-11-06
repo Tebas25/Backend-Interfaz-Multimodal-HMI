@@ -9,6 +9,12 @@ from app.schemas.ws_messages import (
     client_adapter,
     ErrorMessage,
     ErrorPayload,
+    StartPayment,
+    CancelPayment,
+    PaymentResult,
+    PaymentResultPayload,
+    PaymentStarted,
+    PaymentStartedPayload,
 )
 from app.services.screen_state import ScreenState
 
@@ -28,6 +34,45 @@ async def handle_client_message(msg, ws: WebSocket) -> None:
                         payload=ErrorPayload(detail=[{"loc": ["order"], "msg": error}])
                     ),
                 )
+        case StartPayment():
+            await start_payment(msg.payload.drink, ws)
+        case CancelPayment():
+            ws.app.state.payment_service.cancel(msg.payload.payment_id)
+
+
+async def start_payment(drink_name: str, ws: WebSocket) -> None:
+    state = ws.app.state
+    drink = next(
+        (
+            i
+            for i in state.catalog_watcher.items_activos
+            if i.nombre_item.casefold() == drink_name.casefold()
+        ),
+        None,
+    )
+    if drink is None:  # se desactivó mientras el usuario elegía
+        await state.ws_manager.send(
+            ws,
+            PaymentResult(
+                payload=PaymentResultPayload(status="error", reason="drink_unavailable")
+            ),
+        )
+        return
+
+    session = state.payment_service.start(drink)
+    url = state.payment_service.pay_url(session)
+    print(f"[Pago] iniciado {drink.nombre_item} ${session.price} -> {url}")
+    await state.ws_manager.send(
+        ws,
+        PaymentStarted(
+            payload=PaymentStartedPayload(
+                payment_id=session.id,
+                pay_url=url,
+                drink_name=drink.nombre_item,
+                price=session.price,
+            )
+        ),
+    )
 
 
 @ws_router.websocket("/ws")

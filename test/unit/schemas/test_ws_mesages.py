@@ -222,9 +222,12 @@ def test_build_catalog_update_con_cero_activos_envia_catalogo_vacio(catalogo):
 
 
 def test_screen_tiene_exactamente_los_nombres_que_usa_el_frontend():
-    """NavigationService del front reconoce 'welcome', 'menu' y 'payment'. Si se añade o
-    renombra una pantalla, hay que cambiar ambos lados y esta prueba."""
-    assert {s.value for s in Screen} == {"menu", "welcome", "payment"}
+    assert {s.value for s in Screen} == {
+        "menu",
+        "welcome",
+        "payment",
+        "payment_result",
+    }
 
 
 @pytest.mark.parametrize("pantalla", ["menu", "welcome", "payment"])
@@ -347,7 +350,7 @@ def test_server_message_incluye_cobot_status():
     original = CobotStatus(
         payload=CobotStatusPayload(
             codigo=1,
-            tipo_evento=next(iter(TipoEvento)),  # cualquier tipo de evento válido
+            tipo_evento=next(iter(TipoEvento)),
             descripcion="ok",
         )
     )
