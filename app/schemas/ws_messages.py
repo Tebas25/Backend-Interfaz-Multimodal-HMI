@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal, Union
 from uuid import uuid4
@@ -30,6 +31,7 @@ class Screen(StrEnum):
     MENU = "menu"
     WELCOME = "welcome"
     PAYMENT = "payment"
+    PAYMENT_RESULT = "payment_result"
 
 
 class StateSource(StrEnum):
@@ -102,6 +104,29 @@ class CobotStatus(Envelope):
     payload: CobotStatusPayload
 
 
+class PaymentStartedPayload(WsModel):
+    payment_id: str
+    pay_url: str
+    drink_name: str
+    price: Decimal
+
+
+class PaymentStarted(Envelope):
+    type: Literal["payment_started"] = "payment_started"
+    payload: PaymentStartedPayload
+
+
+class PaymentResultPayload(WsModel):
+    payment_id: str | None = None
+    status: Literal["approved", "rejected", "expired", "error"]
+    reason: str | None = None
+
+
+class PaymentResult(Envelope):
+    type: Literal["payment_result"] = "payment_result"
+    payload: PaymentResultPayload
+
+
 ServerMessage = Annotated[
     Union[
         CatalogUpdate,
@@ -111,6 +136,8 @@ ServerMessage = Annotated[
         SelectDrink,
         ShowIngredients,
         CloseIngredients,
+        PaymentStarted,
+        PaymentResult,
     ],
     Field(discriminator="type"),
 ]
@@ -138,7 +165,6 @@ class FrontState(Envelope):
     payload: StatePayload
 
 
-# Front -> Backend
 class OrderPayload(WsModel):
     nombre_item: str
 
@@ -148,7 +174,28 @@ class OrderRequest(Envelope):
     payload: OrderPayload
 
 
-ClientMessage = Annotated[Union[FrontState, OrderRequest], Field(discriminator="type")]
+class StartPaymentPayload(WsModel):
+    drink: str = Field(min_length=1, max_length=100)
+
+
+class StartPayment(Envelope):
+    type: Literal["start_payment"] = "start_payment"
+    payload: StartPaymentPayload
+
+
+class CancelPaymentPayload(WsModel):
+    payment_id: str | None = None
+
+
+class CancelPayment(Envelope):
+    type: Literal["cancel_payment"] = "cancel_payment"
+    payload: CancelPaymentPayload
+
+
+ClientMessage = Annotated[
+    Union[FrontState, OrderRequest, StartPayment, CancelPayment],
+    Field(discriminator="type"),
+]
 client_adapter = TypeAdapter(ClientMessage)
 
 

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from app.api.endpoints import ws_router
+from app.api.pay_pages import router as pay_router
 
 # catalog_router
 from app.core.config import settings
@@ -15,6 +16,8 @@ from app.schemas.ws_messages import (
     DrinkRefPayload,
     ShowIngredients,
     CloseIngredients,
+    PaymentResultPayload,
+    PaymentResult,
 )
 from app.services.catalog_watcher_service import CatalogWatcher
 from app.services.command_listener_service import CommandListenerService
@@ -31,6 +34,7 @@ from app.services.cobot_service import cobot_service
 from app.services.order_service import OrderService
 from app.schemas.events_dto import EventsDTO, TipoEvento
 from app.services.event_publisher import EventPublisher
+from app.services.payment_service import PaymentSession, PaymentStatus, PaymentService
 
 
 @asynccontextmanager
@@ -103,6 +107,25 @@ async def lifespan(app: FastAPI):
     app.state.command_listener = listener
     await listener.start()
 
+    async def on_payment_result(session: PaymentSession) -> None:
+        await manager.broadcast(
+            PaymentResult(
+                payload=PaymentResultPayload(
+                    payment_id=session.id, status=session.status.value
+                )
+            )
+        )
+        if session.status is PaymentStatus.APPROVED:
+            print(
+                f"[Pago] APROBADO: {session.drink.nombre_item} (modbus={session.drink.codigo_modbus})"
+            )
+            # TODO (siguiente fase): ordenar la preparación al cobot
+
+    payments = PaymentService(
+        settings.PUBLIC_BASE_URL, on_payment_result, settings.PAYMENT_TTL_SECONDS
+    )
+    app.state.payment_service = payments
+
     yield
 
     await order_service.stop()
@@ -121,6 +144,7 @@ async def lifespan(app: FastAPI):
     await watcher.stop()
     await update_svc.close()
     await catalog_svc.close()
+    payments.close()
 
 
 app = FastAPI(
@@ -131,6 +155,7 @@ app = FastAPI(
 )
 
 app.include_router(ws_router)
+app.include_router(pay_router)
 
 
 @app.get("/")
