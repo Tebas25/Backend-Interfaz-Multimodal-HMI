@@ -6,7 +6,7 @@ import pytest
 
 from app.schemas.events_dto import EventsDTO, TipoEvento
 from app.schemas.ws_messages import CobotStatus, Navigate, Screen
-from app.services.order_service import OrderService
+from app.services.order_service import ORDER_SCREEN, OrderService
 from app.services.screen_state import ScreenState
 
 ITEM = SimpleNamespace(nombre_item="Cuba Libre", codigo_modbus=3)
@@ -42,9 +42,9 @@ def sent_messages(manager):
 
 
 @pytest.fixture(autouse=True)
-def menu_screen():
+def pantalla_de_pedido():
     ScreenState.reset()
-    ScreenState.current = Screen.MENU
+    ScreenState.current = ORDER_SCREEN
     yield
     ScreenState.reset()
 
@@ -61,11 +61,17 @@ def test_to_payload_system_id_uses_minus_one():
 
 @pytest.mark.asyncio
 class TestRequestOrder:
-    async def test_rejects_when_not_on_menu_screen(self):
+    async def test_rejects_when_not_on_order_screen(self):
         ScreenState.current = Screen.WELCOME
         service, _, _ = make_service()
         error = service.request_order("Cuba Libre")
-        assert error == "Los pedidos solo se aceptan desde el menú"
+        assert error == "Los pedidos solo se aceptan desde la pantalla de pago"
+        assert service._task is None
+
+    async def test_rejects_from_the_menu_before_paying(self):
+        ScreenState.current = Screen.MENU
+        service, _, _ = make_service()
+        assert service.request_order("Cuba Libre") is not None
         assert service._task is None
 
     async def test_rejects_when_screen_unknown(self):

@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     app.state.ws_manager = manager
 
     update_svc = HttpRequestService(
-        f"{settings.micro_url}catalog/check-update/{COBOT_ID}",
+        f"{settings.micro_url}/check-update/{COBOT_ID}",
         authkey=settings.kong_auth_key,
     )
     catalog_svc = HttpRequestService(
@@ -119,7 +119,9 @@ async def lifespan(app: FastAPI):
             print(
                 f"[Pago] APROBADO: {session.drink.nombre_item} (modbus={session.drink.codigo_modbus})"
             )
-            # TODO (siguiente fase): ordenar la preparación al cobot
+            error = order_service.request_order(session.drink.nombre_item)
+            if error:
+                print(f"[Pedido] No pudo arrancar el cobot: {error}")
 
     payments = PaymentService(
         settings.PUBLIC_BASE_URL, on_payment_result, settings.PAYMENT_TTL_SECONDS
