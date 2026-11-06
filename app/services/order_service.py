@@ -14,6 +14,8 @@ from app.services.connection_manager import ConnectionManager
 from app.services.event_publisher import EventPublisher
 from app.services.screen_state import ScreenState
 
+ORDER_SCREEN = Screen.PAYMENT
+
 
 class OrderService:
     def __init__(
@@ -33,8 +35,8 @@ class OrderService:
         """Devuelve un mensaje de error, o None si el pedido arrancó."""
         if self._task and not self._task.done():
             return "Ya hay un pedido en curso"
-        if ScreenState.current is not Screen.MENU:
-            return "Los pedidos solo se aceptan desde el menú"
+        if ScreenState.current is not ORDER_SCREEN:
+            return "Los pedidos solo se aceptan desde la pantalla de pago"
 
         item = next(
             (i for i in self._watcher.items_activos if i.nombre_item == nombre_item),

@@ -146,9 +146,10 @@ def test_rechazar_el_pago_notifica_al_front(servidor):
 
 
 def test_el_resultado_llega_a_todos_los_clientes_conectados(servidor):
-    with servidor.websocket_connect("/ws") as pantalla, servidor.websocket_connect(
-        "/ws"
-    ) as otra:
+    with (
+        servidor.websocket_connect("/ws") as pantalla,
+        servidor.websocket_connect("/ws") as otra,
+    ):
         iniciado = pedir_pago(pantalla)
 
         servidor.post(f"{ruta(iniciado.payload.pay_url)}/approve")
@@ -158,21 +159,23 @@ def test_el_resultado_llega_a_todos_los_clientes_conectados(servidor):
 
 
 def test_payment_started_solo_llega_a_quien_pidio_el_pago(servidor):
-    with servidor.websocket_connect("/ws") as pantalla, servidor.websocket_connect(
-        "/ws"
-    ) as otra:
+    with (
+        servidor.websocket_connect("/ws") as pantalla,
+        servidor.websocket_connect("/ws") as otra,
+    ):
         pedir_pago(pantalla)
 
         assert isinstance(sondear(otra), ErrorMessage)
 
 
-def test_aprobar_un_pago_no_ordena_la_bebida_al_cobot_todavia(servidor):
+def test_aprobar_un_pago_ordena_la_bebida_al_cobot(servidor):
     with servidor.websocket_connect("/ws") as ws:
         iniciado = pedir_pago(ws)
+
         servidor.post(f"{ruta(iniciado.payload.pay_url)}/approve")
         recibir(ws)
 
-    servidor.order_service.request_order.assert_not_called()
+    servidor.order_service.request_order.assert_called_once()
 
 
 # ---------- bebida no disponible / mensajes inválidos ----------
