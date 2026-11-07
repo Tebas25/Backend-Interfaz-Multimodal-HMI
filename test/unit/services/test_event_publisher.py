@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from app.schemas.events_dto import EventsDTO, TipoEvento
-from app.services.event_publisher import EventPublisher
+from app.services.publisher import EventPublisher
 
 
 def _evento(evento_id: str = "1") -> EventsDTO:

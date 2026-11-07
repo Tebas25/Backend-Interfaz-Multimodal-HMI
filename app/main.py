@@ -33,8 +33,10 @@ from app.client.session import modbus_connection
 from app.services.cobot_service import cobot_service
 from app.services.order_service import OrderService
 from app.schemas.events_dto import EventsDTO, TipoEvento
-from app.services.event_publisher import EventPublisher
+from app.services.publisher import Publisher
 from app.services.payment_service import PaymentSession, PaymentStatus, PaymentService
+from app.core.core_constants import COBOT_ID, DEFAULT_EVENT_ID
+from app.schemas.transactions_dto import TransactionsDTO
 
 
 @asynccontextmanager
@@ -66,23 +68,33 @@ async def lifespan(app: FastAPI):
     app.state.catalog_watcher = watcher
     watcher.start()
 
+    # --- Publisher de eventos ---
     analytics_svc = HttpRequestService(
         settings.analytics_events_url, authkey=settings.kong_auth_key
     )
-    publisher = EventPublisher(analytics_svc)
+    publisher = Publisher[EventsDTO]("event-publisher", analytics_svc)
     app.state.event_publisher = publisher
     publisher.start()
     publisher.publish(
         EventsDTO(
             cobot_id=COBOT_ID,
-            evento_id="SYS_START",
+            evento_id=DEFAULT_EVENT_ID,
             tipo_evento=TipoEvento.INFO_SISTEMA,
             descripcion="Backend multimodal iniciado",
         )
     )
 
-    order_service = OrderService(manager, watcher, cobot_service, publisher)
+    # --- Publisher de transacciones ---
+    transactions_svc = HttpRequestService(
+        settings.analytics_transactions_url, authkey=settings.kong_auth_key
+    )
+    tx_publisher = Publisher[TransactionsDTO](
+        "transaction-publisher", transactions_svc, max_retries=5
+    )
+    app.state.transaction_publisher = tx_publisher
+    tx_publisher.start()
 
+    order_service = OrderService(manager, watcher, cobot_service, publisher)
     app.state.order_service = order_service
 
     async def execute_action(action) -> None:
@@ -119,6 +131,18 @@ async def lifespan(app: FastAPI):
             print(
                 f"[Pago] APROBADO: {session.drink.nombre_item} (modbus={session.drink.codigo_modbus})"
             )
+            try:
+                tx_publisher.publish(
+                    TransactionsDTO(
+                        cobot_id=COBOT_ID,
+                        evento_id=DEFAULT_EVENT_ID,
+                        item=session.drink.nombre_item,
+                        ingreso=session.drink.precio_item,
+                    )
+                )
+            except Exception as e:
+                print(f"[Pago] No se pudo encolar la transacción: {e}")
+
             error = order_service.request_order(session.drink.nombre_item)
             if error:
                 print(f"[Pedido] No pudo arrancar el cobot: {error}")
@@ -134,11 +158,13 @@ async def lifespan(app: FastAPI):
     publisher.publish(
         EventsDTO(
             cobot_id=COBOT_ID,
-            evento_id="SYS_STOP",
+            evento_id=DEFAULT_EVENT_ID,
             tipo_evento=TipoEvento.INFO_SISTEMA,
             descripcion="Backend multimodal detenido",
         )
     )
+    await tx_publisher.stop()
+    await transactions_svc.close()
     await publisher.stop()
     await analytics_svc.close()
     modbus_connection.close()

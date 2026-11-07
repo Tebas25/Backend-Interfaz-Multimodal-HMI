@@ -11,7 +11,7 @@ from app.schemas.ws_messages import (
 )
 from app.services.cobot_service import CobotService
 from app.services.connection_manager import ConnectionManager
-from app.services.event_publisher import EventPublisher
+from app.services.publisher import Publisher
 from app.services.screen_state import ScreenState
 
 ORDER_SCREEN = Screen.PAYMENT
@@ -23,7 +23,7 @@ class OrderService:
         manager: ConnectionManager,
         watcher,
         cobot: CobotService,
-        publisher: EventPublisher,
+        publisher: Publisher[EventsDTO],
     ):
         self._manager = manager
         self._watcher = watcher
@@ -71,7 +71,7 @@ class OrderService:
     @staticmethod
     def _to_payload(evento: EventsDTO) -> CobotStatusPayload:
         return CobotStatusPayload(
-            codigo=int(evento.evento_id) if evento.evento_id.isdigit() else -1,
+            codigo=int(evento.codigo) if evento.codigo is not None else -1,
             tipo_evento=evento.tipo_evento,
             descripcion=evento.descripcion,
         )

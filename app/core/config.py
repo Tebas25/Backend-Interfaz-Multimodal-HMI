@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     polling_interval: float
     order_timeout: float
     analytics_events_url: str
+    analytics_transactions_url: str
     PUBLIC_BASE_URL: str
     PAYMENT_TTL_SECONDS: int
 
