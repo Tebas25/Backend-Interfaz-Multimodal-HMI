@@ -15,6 +15,7 @@ REQUERIDAS = {
     "polling_interval": "0.2",
     "order_timeout": "120",
     "analytics_events_url": "http://x/analytics/events",
+    "analytics_transactions_url": "http://x/analytics/transactions",
 }
 
 
@@ -58,6 +59,7 @@ def test_lee_la_configuracion_del_cobot_con_sus_tipos(env_completo):
     assert s.polling_interval == 0.2
     assert s.order_timeout == 120.0
     assert s.analytics_events_url == "http://x/analytics/events"
+    assert s.analytics_transactions_url == "http://x/analytics/transactions"
 
 
 def test_variables_de_entorno_sobrescriben_defaults(env_completo):

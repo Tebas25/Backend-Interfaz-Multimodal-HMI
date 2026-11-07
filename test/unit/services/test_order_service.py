@@ -8,22 +8,24 @@ from app.schemas.events_dto import EventsDTO, TipoEvento
 from app.schemas.ws_messages import CobotStatus, Navigate, Screen
 from app.services.order_service import ORDER_SCREEN, OrderService
 from app.services.screen_state import ScreenState
+from app.core.core_constants import DEFAULT_EVENT_ID
 
 ITEM = SimpleNamespace(nombre_item="Cuba Libre", codigo_modbus=3)
 
 
-def _evento(evento_id: str) -> EventsDTO:
+def _evento(codigo: int | None) -> EventsDTO:
     return EventsDTO(
         cobot_id="CBT000T",
-        evento_id=evento_id,
+        evento_id=DEFAULT_EVENT_ID,
         tipo_evento=TipoEvento.INFO_ROBOT,
         descripcion="d",
+        codigo=codigo,
     )
 
 
 async def two_events(code):
-    yield _evento("101")
-    yield _evento("200")
+    yield _evento(101)
+    yield _evento(200)
 
 
 def make_service(gen_fn=two_events, items=None):
@@ -49,14 +51,14 @@ def pantalla_de_pedido():
     ScreenState.reset()
 
 
-def test_to_payload_numeric_id():
-    payload = OrderService._to_payload(_evento("102"))
+def test_to_payload_uses_cobot_code():
+    payload = OrderService._to_payload(_evento(102))
     assert payload.codigo == 102
     assert payload.tipo_evento is TipoEvento.INFO_ROBOT
 
 
-def test_to_payload_system_id_uses_minus_one():
-    assert OrderService._to_payload(_evento("BUSY")).codigo == -1
+def test_to_payload_without_code_uses_minus_one():
+    assert OrderService._to_payload(_evento(None)).codigo == -1
 
 
 @pytest.mark.asyncio
@@ -138,8 +140,9 @@ class TestRun:
         service, _, publisher = make_service()
         service.request_order("Cuba Libre")
         await service._task
-        published = [c.args[0].evento_id for c in publisher.publish.call_args_list]
-        assert published == ["101", "200"]
+        published = [c.args[0] for c in publisher.publish.call_args_list]
+        assert [e.codigo for e in published] == [101, 200]
+        assert {e.evento_id for e in published} == {DEFAULT_EVENT_ID}
 
     async def test_navigates_to_welcome_even_if_cobot_service_fails(self):
         async def boom(code):

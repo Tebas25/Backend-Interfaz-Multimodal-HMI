@@ -16,6 +16,7 @@ ENV_DE_PRUEBA = {
     "analytics_events_url": "http://fake-kong/api/v1/analytics/events",
     "PUBLIC_BASE_URL": "http://192.168.0.10:8888",
     "PAYMENT_TTL_SECONDS": "120",
+    "analytics_transactions_url": "http://fake-kong/api/v1/analytics/transactions",
 }
 os.environ.update(ENV_DE_PRUEBA)
 

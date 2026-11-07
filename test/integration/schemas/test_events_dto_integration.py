@@ -1,5 +1,6 @@
 """Integración del DTO con Pydantic (JSON real) y con TypeAdapter,
 tal como lo usa HttpRequestService."""
+
 import json
 from datetime import datetime
 
@@ -68,3 +69,17 @@ def test_serializacion_de_lista_a_json_valido():
 def test_todos_los_tipos_de_evento_viajan_por_json(tipo):
     dto = EventosResponseDTO.model_validate_json(json.dumps(payload_evento(1, tipo)))
     assert dto.tipo_evento.value == tipo
+
+
+def test_ida_y_vuelta_pierde_codigo_a_proposito():
+    original = EventsDTO(
+        cobot_id="c1",
+        evento_id="EVT-001",
+        tipo_evento=TipoEvento.ERROR_ROBOT,
+        descripcion="falla",
+        codigo=404,
+    )
+    reconstruido = EventsDTO.model_validate_json(original.model_dump_json())
+    assert original.codigo == 404
+    assert reconstruido.codigo is None
+    assert reconstruido.evento_id == original.evento_id

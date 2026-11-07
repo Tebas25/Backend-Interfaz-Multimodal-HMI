@@ -49,7 +49,11 @@ def dobles(monkeypatch):
     )
     monkeypatch.setattr(main, "CatalogWatcher", MagicMock(return_value=watcher))
     monkeypatch.setattr(main, "CommandListenerService", listener_cls)
-    monkeypatch.setattr(main, "EventPublisher", MagicMock(return_value=publisher))
+    tx_publisher = MagicMock(name="tx_publisher")
+    tx_publisher.stop = AsyncMock()
+    monkeypatch.setattr(
+        main, "Publisher", MagicMock(side_effect=[publisher, tx_publisher])
+    )
     monkeypatch.setattr(main, "OrderService", MagicMock(return_value=order_service))
     monkeypatch.setattr(main, "modbus_connection", MagicMock())
     return {"watcher": watcher, "listener": listener, "listener_cls": listener_cls}
@@ -65,7 +69,6 @@ async def app_en_marcha(dobles):
 
 def _on_action(dobles):
     return dobles["listener_cls"].call_args.kwargs["on_action"]
-
 
 
 async def test_el_listener_se_crea_con_on_action_y_get_items(dobles):

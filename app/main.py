@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
     analytics_svc = HttpRequestService(
         settings.analytics_events_url, authkey=settings.kong_auth_key
     )
-    publisher = Publisher[EventsDTO]("event-publisher", analytics_svc)
+    publisher: Publisher[EventsDTO] = Publisher("event-publisher", analytics_svc)
     app.state.event_publisher = publisher
     publisher.start()
     publisher.publish(
@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
     transactions_svc = HttpRequestService(
         settings.analytics_transactions_url, authkey=settings.kong_auth_key
     )
-    tx_publisher = Publisher[TransactionsDTO](
+    tx_publisher: Publisher[TransactionsDTO] = Publisher(
         "transaction-publisher", transactions_svc, max_retries=5
     )
     app.state.transaction_publisher = tx_publisher

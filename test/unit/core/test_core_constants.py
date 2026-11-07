@@ -11,14 +11,21 @@ from app.core.core_constants import (
     cobot_logs,
 )
 from app.schemas.events_dto import EventsDTO, TipoEvento
+from app.core.core_constants import DEFAULT_EVENT_ID
 
 
-def test_every_entry_is_an_events_dto_with_matching_id():
+def test_every_entry_is_an_events_dto_with_matching_code():
     for code, evento in cobot_logs.items():
         assert isinstance(evento, EventsDTO)
-        assert evento.evento_id == str(code)
+        assert evento.codigo == code
+        assert evento.evento_id == DEFAULT_EVENT_ID
         assert evento.cobot_id == COBOT_ID
         assert evento.descripcion
+
+
+def test_codigo_no_viaja_al_micro():
+    for evento in cobot_logs.values():
+        assert "codigo" not in evento.model_dump(mode="json")
 
 
 def test_all_codes_fit_in_a_16_bit_register():

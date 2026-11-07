@@ -79,11 +79,10 @@ def estado(pantalla: Screen, origen=StateSource.TOUCH, ref=None) -> str:
 def app_sin_red(monkeypatch):
     monkeypatch.setattr(main, "HttpRequestService", ServicioHttpInerte)
     monkeypatch.setattr(main, "CatalogWatcher", WatcherConBebidas)
-    for nombre in ("EventPublisher", "OrderService"):
+    for nombre in ("Publisher", "OrderService"):
         doble = MagicMock()
         doble.return_value.stop = AsyncMock()
         monkeypatch.setattr(main, nombre, doble)
-    monkeypatch.setattr(main, "modbus_connection", MagicMock())
 
 
 @pytest.fixture
@@ -108,7 +107,6 @@ def marcador() -> Navigate:
 def en_menu(client, ws):
     ws.send_text(estado(Screen.MENU))
     assert esperar(lambda: ScreenState.current is Screen.MENU)
-
 
 
 def test_nombrar_una_bebida_en_el_menu_envia_select_drink(microfono_falso, procesados):
@@ -171,9 +169,10 @@ def test_los_mensajes_de_voz_son_validos_para_el_contrato(microfono_falso, proce
 
 def test_la_orden_de_bebida_llega_a_todos_los_clientes(microfono_falso, procesados):
     with TestClient(main.app) as client:
-        with client.websocket_connect("/ws") as ws1, client.websocket_connect(
-            "/ws"
-        ) as ws2:
+        with (
+            client.websocket_connect("/ws") as ws1,
+            client.websocket_connect("/ws") as ws2,
+        ):
             en_menu(client, ws1)
 
             microfono_falso.hablar("a1", "Rony un mojito")
@@ -250,7 +249,6 @@ def test_ordenes_que_no_se_entienden_no_envian_nada(microfono_falso, procesados,
         primero = ws.receive_json()
 
     assert primero["type"] == "navigate"
-
 
 
 def test_una_bebida_nueva_en_el_catalogo_se_reconoce_sin_reiniciar(

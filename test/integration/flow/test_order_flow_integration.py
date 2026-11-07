@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.endpoints import ws_router
+from app.core.core_constants import COBOT_ID, DEFAULT_EVENT_ID
 from app.schemas.events_dto import EventsDTO, TipoEvento
 from app.schemas.ws_messages import (
     FrontState,
@@ -33,9 +34,17 @@ def esperar(condicion, timeout=2.0):
     return False
 
 
-def evento(evento_id: str, tipo=TipoEvento.INFO_ROBOT) -> EventsDTO:
+def evento(
+    codigo: int | None,
+    tipo: TipoEvento = TipoEvento.INFO_ROBOT,
+    descripcion: str = "d",
+) -> EventsDTO:
     return EventsDTO(
-        cobot_id="CBT000T", evento_id=evento_id, tipo_evento=tipo, descripcion="d"
+        cobot_id=COBOT_ID,
+        evento_id=DEFAULT_EVENT_ID,
+        codigo=codigo,
+        tipo_evento=tipo,
+        descripcion=descripcion,
     )
 
 
@@ -67,9 +76,9 @@ def construir_app(prepare_drink):
 
 
 async def pedido_completo(codigo):
-    yield evento("101")
-    yield evento("102")
-    yield evento("200")
+    yield evento(101)
+    yield evento(102)
+    yield evento(200)
 
 
 def test_un_pedido_llega_al_front_en_orden_y_termina_en_bienvenida():
@@ -83,8 +92,9 @@ def test_un_pedido_llega_al_front_en_orden_y_termina_en_bienvenida():
     assert [m["type"] for m in mensajes] == ["cobot_status"] * 3 + ["navigate"]
     assert [m["payload"]["codigo"] for m in mensajes[:3]] == [101, 102, 200]
     assert mensajes[3]["payload"]["screen"] == "welcome"
-    enviados = [c.args[0].evento_id for c in publisher.publish.call_args_list]
-    assert enviados == ["101", "102", "200"]
+    publicados = [c.args[0] for c in publisher.publish.call_args_list]
+    assert [e.codigo for e in publicados] == [101, 102, 200]
+    assert {e.evento_id for e in publicados} == {DEFAULT_EVENT_ID}
 
 
 def test_el_codigo_del_catalogo_es_el_que_recibe_el_cobot():
@@ -92,7 +102,7 @@ def test_el_codigo_del_catalogo_es_el_que_recibe_el_cobot():
 
     async def registrando(codigo):
         recibido.append(codigo)
-        yield evento("200")
+        yield evento(200)
 
     app, _, _ = construir_app(registrando)
 
@@ -107,7 +117,9 @@ def test_el_codigo_del_catalogo_es_el_que_recibe_el_cobot():
 
 def test_un_evento_de_sistema_llega_con_codigo_menos_uno():
     async def con_timeout(codigo):
-        yield evento("TIMEOUT", TipoEvento.ERROR_SISTEMA)
+        yield evento(
+            None, TipoEvento.ERROR_SISTEMA, "El pedido excedió el tiempo máximo"
+        )
 
     app, _, _ = construir_app(con_timeout)
 
@@ -143,9 +155,9 @@ def test_un_segundo_pedido_en_curso_recibe_un_error():
     gate = threading.Event()
 
     async def lento(codigo):
-        yield evento("101")
+        yield evento(101)
         await asyncio.get_running_loop().run_in_executor(None, gate.wait, 5)
-        yield evento("200")
+        yield evento(200)
 
     app, _, _ = construir_app(lento)
 
@@ -171,7 +183,7 @@ def test_un_pedido_fuera_de_la_pantalla_de_pago_recibe_un_error():
 
     async def registrando(codigo):
         arrancado.append(codigo)
-        yield evento("200")
+        yield evento(200)
 
     app, _, _ = construir_app(registrando)
 
@@ -190,7 +202,7 @@ def test_pedir_desde_el_menu_antes_de_pagar_no_arranca_el_cobot():
 
     async def registrando(codigo):
         arrancado.append(codigo)
-        yield evento("200")
+        yield evento(200)
 
     app, _, _ = construir_app(registrando)
 
@@ -208,7 +220,7 @@ def test_bebidas_invalidas_reciben_un_error_y_no_arrancan_el_cobot():
 
     async def registrando(codigo):
         arrancado.append(codigo)
-        yield evento("200")
+        yield evento(200)
 
     app, _, _ = construir_app(registrando)
 
