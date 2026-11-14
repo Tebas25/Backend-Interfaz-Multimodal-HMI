@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.core.core_constants import DEFAULT_EVENT_ID
 from app.schemas.events_dto import EventsDTO, TipoEvento
-from app.schemas.ws_messages import CobotStatus, Navigate, Screen
+from app.schemas.ws_messages import CobotStatus, Screen
 from app.services.order_service import ORDER_SCREEN, OrderService
 from app.services.screen_state import ScreenState
-from app.core.core_constants import DEFAULT_EVENT_ID
 
 ITEM = SimpleNamespace(nombre_item="Cuba Libre", codigo_modbus=3)
 
@@ -97,7 +97,7 @@ class TestRequestOrder:
 
         async def blocking(code):
             await release.wait()
-            yield _evento("200")
+            yield _evento(200)
 
         service, _, _ = make_service(blocking)
         assert service.request_order("Cuba Libre") is None
@@ -120,21 +120,20 @@ class TestRun:
 
         async def recording(code):
             received.append(code)
-            yield _evento("200")
+            yield _evento(200)
 
         service, _, _ = make_service(recording)
         service.request_order("Cuba Libre")
         await service._task
         assert received == [3]
 
-    async def test_broadcasts_each_event_then_navigates_to_welcome(self):
+    async def test_broadcasts_each_event(self):
         service, manager, publisher = make_service()
         service.request_order("Cuba Libre")
         await service._task
         sent = sent_messages(manager)
-        assert [type(m) for m in sent] == [CobotStatus, CobotStatus, Navigate]
-        assert [m.payload.codigo for m in sent[:2]] == [101, 200]
-        assert sent[2].payload.screen is Screen.WELCOME
+        assert [type(m) for m in sent] == [CobotStatus, CobotStatus]
+        assert [m.payload.codigo for m in sent] == [101, 200]
 
     async def test_publishes_each_event_to_analytics(self):
         service, _, publisher = make_service()
@@ -144,7 +143,7 @@ class TestRun:
         assert [e.codigo for e in published] == [101, 200]
         assert {e.evento_id for e in published} == {DEFAULT_EVENT_ID}
 
-    async def test_navigates_to_welcome_even_if_cobot_service_fails(self):
+    async def test_handles_cobot_service_failure_without_broadcasting(self):
         async def boom(code):
             raise RuntimeError("fallo")
             yield
@@ -152,8 +151,7 @@ class TestRun:
         service, manager, publisher = make_service(boom)
         service.request_order("Cuba Libre")
         await service._task
-        sent = sent_messages(manager)
-        assert [type(m) for m in sent] == [Navigate]
+        assert sent_messages(manager) == []
         publisher.publish.assert_not_called()
 
 
@@ -162,7 +160,7 @@ class TestStop:
     async def test_stop_cancels_running_order_without_navigating(self):
         async def never(code):
             await asyncio.Event().wait()
-            yield _evento("200")
+            yield _evento(200)
 
         service, manager, _ = make_service(never)
         service.request_order("Cuba Libre")

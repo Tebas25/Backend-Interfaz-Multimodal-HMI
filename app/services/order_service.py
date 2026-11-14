@@ -64,9 +64,6 @@ class OrderService:
             raise
         except Exception as e:
             print(f"[Pedido] Error: {type(e).__name__}: {e}")
-        await self._manager.broadcast(
-            Navigate(payload=NavigatePayload(screen=Screen.WELCOME))
-        )
 
     @staticmethod
     def _to_payload(evento: EventsDTO) -> CobotStatusPayload:
