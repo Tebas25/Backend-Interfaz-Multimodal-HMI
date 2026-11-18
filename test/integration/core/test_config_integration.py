@@ -15,6 +15,7 @@ BASE = {
     "polling_interval": "0.2",
     "order_timeout": "120",
     "analytics_events_url": "http://analitica-env/events",
+    "analytics_transactions_url": "http://analitica-env/transactions",
 }
 
 
@@ -39,6 +40,7 @@ def test_carga_desde_archivo_env(sin_env, tmp_path):
     assert s.cobot_port == 502
     assert s.polling_interval == 0.2
     assert s.analytics_events_url == "http://analitica-env/events"
+    assert s.analytics_transactions_url == "http://analitica-env/transactions"
 
 
 def test_env_del_sistema_tiene_prioridad_sobre_archivo(sin_env, tmp_path):
@@ -83,5 +85,10 @@ def test_un_env_incompleto_falla_nombrando_lo_que_falta(sin_env, tmp_path):
     env.write_text("get_catalog_url=u\nmicro_url=m\nkong_auth_key=k\n")
     with pytest.raises(ValidationError) as exc:
         Settings(_env_file=env)
-    for campo in ("cobot_host", "order_timeout", "analytics_events_url"):
+    for campo in (
+        "cobot_host",
+        "order_timeout",
+        "analytics_events_url",
+        "analytics_transactions_url",
+    ):
         assert campo in str(exc.value)

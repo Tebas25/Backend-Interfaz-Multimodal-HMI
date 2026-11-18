@@ -38,7 +38,7 @@ async def simulate() -> None:
         while await get_order() != 0:
             await asyncio.sleep(0.1)
         print("[Cobot] handshake OK")
-        await asyncio.sleep(3)
+        await asyncio.sleep(10)
         await set_status(200)
         await asyncio.sleep(1)
         await set_status(0)

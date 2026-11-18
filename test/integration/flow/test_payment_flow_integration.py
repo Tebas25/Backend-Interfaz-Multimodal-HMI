@@ -60,7 +60,6 @@ def _levantar(monkeypatch, make_item, ttl_segundos):
     monkeypatch.setattr(
         main, "CommandListenerService", MagicMock(return_value=listener)
     )
-    monkeypatch.setattr(main, "EventPublisher", MagicMock(return_value=publisher))
     monkeypatch.setattr(main, "OrderService", MagicMock(return_value=orden))
     monkeypatch.setattr(main, "modbus_connection", MagicMock())
     monkeypatch.setattr(main.settings, "PUBLIC_BASE_URL", BASE)

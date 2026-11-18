@@ -65,6 +65,32 @@ class TestEventsDTO:
         dump = EventsDTO(**self.datos()).model_dump(mode="json")
         assert dump["tipo_evento"] == "Warning"
 
+    def test_codigo_es_opcional_y_por_defecto_none(self):
+        assert EventsDTO(**self.datos()).codigo is None
+
+    def test_codigo_accesible_como_atributo(self):
+        assert EventsDTO(**self.datos(codigo=404)).codigo == 404
+
+    def test_codigo_no_se_serializa(self):
+        dto = EventsDTO(**self.datos(codigo=404))
+        assert "codigo" not in dto.model_dump()
+        assert "codigo" not in dto.model_dump(mode="json")
+        assert "codigo" not in dto.model_dump_json()
+
+    def test_payload_al_micro_tiene_solo_los_campos_esperados(self):
+        dto = EventsDTO(**self.datos(codigo=404))
+        assert set(dto.model_dump(mode="json")) == {
+            "cobot_id",
+            "evento_id",
+            "tipo_evento",
+            "descripcion",
+        }
+
+    def test_hereda_de_analytics_message(self):
+        from app.schemas.analytics_message_dto import AnalyticsMessage
+
+        assert isinstance(EventsDTO(**self.datos()), AnalyticsMessage)
+
 
 class TestEventosResponseDTO:
     def datos(self, **cambios):

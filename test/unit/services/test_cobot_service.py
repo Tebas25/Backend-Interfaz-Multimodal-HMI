@@ -19,6 +19,7 @@ from app.core.core_constants import (
 )
 from app.schemas.events_dto import TipoEvento
 from app.services.cobot_service import CobotService
+from app.core.core_constants import DEFAULT_EVENT_ID
 
 UNKNOWN_CODE = 77
 DRINK = 7
@@ -38,6 +39,10 @@ NETWORK_ERRORS = [
     asyncio.TimeoutError(),
     OSError("cable desconectado"),
 ]
+
+
+def codigos(events):
+    return [e.codigo for e in events]
 
 
 def _response(error: bool = False, registers=None):
@@ -70,7 +75,8 @@ def fast(monkeypatch):
 class TestHelpers:
     def test_translate_known_code(self, service):
         evento = service._translate(CONNECTION_LOST_CODE)
-        assert evento.evento_id == str(CONNECTION_LOST_CODE)
+        assert evento.codigo == CONNECTION_LOST_CODE
+        assert evento.evento_id == DEFAULT_EVENT_ID
 
     def test_translate_unknown_code_returns_none(self, service):
         assert UNKNOWN_CODE not in cobot_logs
@@ -167,7 +173,7 @@ class TestPrepareDrink:
         service.read_status = AsyncMock(return_value=state)
         service.write_order = AsyncMock()
         events = await collect(service.prepare_drink(DRINK))
-        assert [e.evento_id for e in events] == [str(state)]
+        assert codigos(events) == [state]
         service.write_order.assert_not_awaited()
 
     async def test_not_idle_unknown_code_emits_not_idle(self, service):
@@ -181,7 +187,7 @@ class TestPrepareDrink:
         service.read_status = AsyncMock(side_effect=[STATE_IDLE])
         service.write_order = AsyncMock(return_value=CONNECTION_LOST_CODE)
         events = await collect(service.prepare_drink(DRINK))
-        assert [e.evento_id for e in events] == [str(CONNECTION_LOST_CODE)]
+        assert codigos(events) == [CONNECTION_LOST_CODE]
 
     async def test_happy_path_emits_changes_and_single_handshake(self, service):
         service.read_status = AsyncMock(
@@ -196,11 +202,7 @@ class TestPrepareDrink:
         )
         service.write_order = AsyncMock(return_value=None)
         events = await collect(service.prepare_drink(DRINK))
-        assert [e.evento_id for e in events] == [
-            str(INTERMEDIATE),
-            str(STATE_PREPARING),
-            str(STATE_DELIVERED),
-        ]
+        assert codigos(events) == [INTERMEDIATE, STATE_PREPARING, STATE_DELIVERED]
         assert service.write_order.await_args_list == [
             call(DRINK),
             call(DEFAULT_VALUE),
@@ -229,7 +231,7 @@ class TestPrepareDrink:
         service.read_status = AsyncMock(side_effect=[STATE_IDLE, STATE_PREPARING])
         service.write_order = AsyncMock(side_effect=[None, CONNECTION_LOST_CODE])
         events = await collect(service.prepare_drink(DRINK))
-        assert [e.evento_id for e in events] == [str(CONNECTION_LOST_CODE)]
+        assert codigos(events) == [CONNECTION_LOST_CODE]
 
     async def test_unknown_codes_are_not_emitted(self, service):
         assert UNKNOWN_CODE not in cobot_logs
@@ -244,10 +246,7 @@ class TestPrepareDrink:
         )
         service.write_order = AsyncMock(return_value=None)
         events = await collect(service.prepare_drink(DRINK))
-        assert [e.evento_id for e in events] == [
-            str(STATE_PREPARING),
-            str(STATE_DELIVERED),
-        ]
+        assert codigos(events) == [STATE_PREPARING, STATE_DELIVERED]
 
     async def test_idle_before_delivery_does_not_end_the_order(self, service):
         service.read_status = AsyncMock(
@@ -261,22 +260,15 @@ class TestPrepareDrink:
         )
         service.write_order = AsyncMock(return_value=None)
         events = await collect(service.prepare_drink(DRINK))
-        assert [e.evento_id for e in events] == [
-            str(STATE_PREPARING),
-            str(STATE_DELIVERED),
-        ]
+        assert codigos(events) == [STATE_PREPARING, STATE_DELIVERED]
 
     async def test_critical_state_emits_and_ends(self, service):
-        # Si el bucle siguiera leyendo, la lista agotada lanzaría un error
         service.read_status = AsyncMock(
             side_effect=[STATE_IDLE, STATE_PREPARING, CRITICAL]
         )
         service.write_order = AsyncMock(return_value=None)
         events = await collect(service.prepare_drink(DRINK))
-        assert [e.evento_id for e in events] == [
-            str(STATE_PREPARING),
-            str(CRITICAL),
-        ]
+        assert [e.codigo for e in events] == [STATE_PREPARING, CRITICAL]
         assert not service._lock.locked()
 
     async def test_connection_lost_mid_order_emits_and_ends(self, service):
@@ -285,7 +277,7 @@ class TestPrepareDrink:
         )
         service.write_order = AsyncMock(return_value=None)
         events = await collect(service.prepare_drink(DRINK))
-        assert events[-1].evento_id == str(CONNECTION_LOST_CODE)
+        assert events[-1].codigo == CONNECTION_LOST_CODE
 
     async def test_timeout_emits_timeout_event_and_releases_lock(
         self, service, monkeypatch

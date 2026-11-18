@@ -6,9 +6,11 @@ import pytest
 from fastapi import FastAPI
 
 from app import main
+from app.core.core_constants import COBOT_ID, DEFAULT_EVENT_ID
 from app.main import app, lifespan
 from app.schemas.ws_messages import PaymentResult
 from app.services.payment_service import PaymentService, PaymentSession, PaymentStatus
+from app.schemas.transactions_dto import TransactionsDTO
 
 
 def _servicio_con_close():
@@ -27,24 +29,28 @@ def dobles(monkeypatch):
     listener.stop = AsyncMock()
     publisher = MagicMock(name="publisher")
     publisher.stop = AsyncMock()
+    tx_publisher = MagicMock(name="tx_publisher")
+    tx_publisher.stop = AsyncMock()
     order_service = MagicMock(name="order_service")
     order_service.stop = AsyncMock()
 
     monkeypatch.setattr(
-        main,
-        "HttpRequestService",
-        MagicMock(side_effect=lambda *a, **k: _servicio_con_close()),
+        main, "Publisher", MagicMock(side_effect=[publisher, tx_publisher])
     )
     monkeypatch.setattr(main, "CatalogWatcher", MagicMock(return_value=watcher))
     monkeypatch.setattr(
         main, "CommandListenerService", MagicMock(return_value=listener)
     )
-    monkeypatch.setattr(main, "EventPublisher", MagicMock(return_value=publisher))
     monkeypatch.setattr(main, "OrderService", MagicMock(return_value=order_service))
     monkeypatch.setattr(main, "modbus_connection", MagicMock())
     monkeypatch.setattr(main.settings, "PUBLIC_BASE_URL", "http://10.0.0.5:9000/")
     monkeypatch.setattr(main.settings, "PAYMENT_TTL_SECONDS", 90)
-    return {"order_service": order_service}
+    order_service.request_order.return_value = None  # pedido aceptado
+    return {
+        "order_service": order_service,
+        "publisher": publisher,
+        "tx_publisher": tx_publisher,
+    }
 
 
 @pytest.fixture
@@ -161,3 +167,68 @@ async def test_un_pago_no_aprobado_no_imprime_el_aviso_de_aprobacion(
     await callback(sesion(estado))
 
     assert "APROBADO" not in capsys.readouterr().out
+
+
+async def test_un_pago_aprobado_publica_la_transaccion(on_result, sesion, dobles):
+    callback, _ = on_result
+
+    await callback(sesion(PaymentStatus.APPROVED))
+
+    dobles["tx_publisher"].publish.assert_called_once()
+    tx = dobles["tx_publisher"].publish.call_args.args[0]
+    assert isinstance(tx, TransactionsDTO)
+    assert tx.cobot_id == COBOT_ID
+    assert tx.evento_id == DEFAULT_EVENT_ID
+    assert tx.item == "Mojito"
+    assert tx.ingreso == 5.5
+
+
+@pytest.mark.parametrize("estado", [PaymentStatus.REJECTED, PaymentStatus.EXPIRED])
+async def test_un_pago_no_aprobado_no_publica_transaccion(
+    on_result, sesion, dobles, estado
+):
+    callback, _ = on_result
+
+    await callback(sesion(estado))
+
+    dobles["tx_publisher"].publish.assert_not_called()
+
+
+async def test_la_transaccion_se_publica_aunque_el_cobot_no_arranque(
+    on_result, sesion, dobles
+):
+    dobles["order_service"].request_order.return_value = "Ya hay un pedido en curso"
+    callback, _ = on_result
+
+    await callback(sesion(PaymentStatus.APPROVED))
+
+    dobles["tx_publisher"].publish.assert_called_once()
+
+
+async def test_un_fallo_al_publicar_no_bloquea_el_pedido(on_result, sesion, dobles):
+    dobles["tx_publisher"].publish.side_effect = RuntimeError("cola rota")
+    callback, _ = on_result
+
+    await callback(sesion(PaymentStatus.APPROVED))
+
+    dobles["order_service"].request_order.assert_called_once_with("Mojito")
+
+
+async def test_una_transaccion_invalida_no_bloquea_el_pedido(
+    on_result, dobles, make_item
+):
+    # "Ab" incumple item.min_length=3: el DTO falla al construirse
+    item = make_item(nombre="Ab", precio="5.50", codigo=3)
+    sesion_corta = PaymentSession(
+        drink=item,
+        price=item.precio_item,
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+        id="tok-corto",
+        status=PaymentStatus.APPROVED,
+    )
+    callback, _ = on_result
+
+    await callback(sesion_corta)
+
+    dobles["tx_publisher"].publish.assert_not_called()
+    dobles["order_service"].request_order.assert_called_once_with("Ab")

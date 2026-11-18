@@ -1,6 +1,7 @@
 from app.schemas.events_dto import EventsDTO, TipoEvento
 
 COBOT_ID = "CBT000T"
+DEFAULT_EVENT_ID = "EVT-001"
 ORDER_REGISTER = 0
 STATUS_REGISTER = 1
 DEFAULT_VALUE = 0
@@ -15,7 +16,8 @@ CRITICAL_STATES = {404, 500, 501, 503, CONNECTION_LOST_CODE}
 def _evento(codigo: int, tipo: TipoEvento, descripcion: str) -> EventsDTO:
     return EventsDTO(
         cobot_id=COBOT_ID,
-        evento_id=str(codigo),
+        evento_id=DEFAULT_EVENT_ID,
+        codigo=codigo,
         tipo_evento=tipo,
         descripcion=descripcion,
     )

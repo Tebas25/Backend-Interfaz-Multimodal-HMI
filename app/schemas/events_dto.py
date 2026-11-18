@@ -1,7 +1,9 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
+
+from app.schemas.analytics_message_dto import AnalyticsMessage
 
 
 class TipoEvento(str, Enum):
@@ -12,9 +14,8 @@ class TipoEvento(str, Enum):
     ERROR_SISTEMA = "ErrorSistema"
 
 
-class EventsDTO(BaseModel):
-    cobot_id: str
-    evento_id: str
+class EventsDTO(AnalyticsMessage):
+    codigo: int | None = Field(default=None, exclude=True)
     tipo_evento: TipoEvento
     descripcion: str
 

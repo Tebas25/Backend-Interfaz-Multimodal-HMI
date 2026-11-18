@@ -4,26 +4,28 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.core.core_constants import DEFAULT_EVENT_ID
 from app.schemas.events_dto import EventsDTO, TipoEvento
-from app.schemas.ws_messages import CobotStatus, Navigate, Screen
+from app.schemas.ws_messages import CobotStatus, Screen
 from app.services.order_service import ORDER_SCREEN, OrderService
 from app.services.screen_state import ScreenState
 
 ITEM = SimpleNamespace(nombre_item="Cuba Libre", codigo_modbus=3)
 
 
-def _evento(evento_id: str) -> EventsDTO:
+def _evento(codigo: int | None) -> EventsDTO:
     return EventsDTO(
         cobot_id="CBT000T",
-        evento_id=evento_id,
+        evento_id=DEFAULT_EVENT_ID,
         tipo_evento=TipoEvento.INFO_ROBOT,
         descripcion="d",
+        codigo=codigo,
     )
 
 
 async def two_events(code):
-    yield _evento("101")
-    yield _evento("200")
+    yield _evento(101)
+    yield _evento(200)
 
 
 def make_service(gen_fn=two_events, items=None):
@@ -49,14 +51,14 @@ def pantalla_de_pedido():
     ScreenState.reset()
 
 
-def test_to_payload_numeric_id():
-    payload = OrderService._to_payload(_evento("102"))
+def test_to_payload_uses_cobot_code():
+    payload = OrderService._to_payload(_evento(102))
     assert payload.codigo == 102
     assert payload.tipo_evento is TipoEvento.INFO_ROBOT
 
 
-def test_to_payload_system_id_uses_minus_one():
-    assert OrderService._to_payload(_evento("BUSY")).codigo == -1
+def test_to_payload_without_code_uses_minus_one():
+    assert OrderService._to_payload(_evento(None)).codigo == -1
 
 
 @pytest.mark.asyncio
@@ -95,7 +97,7 @@ class TestRequestOrder:
 
         async def blocking(code):
             await release.wait()
-            yield _evento("200")
+            yield _evento(200)
 
         service, _, _ = make_service(blocking)
         assert service.request_order("Cuba Libre") is None
@@ -118,30 +120,30 @@ class TestRun:
 
         async def recording(code):
             received.append(code)
-            yield _evento("200")
+            yield _evento(200)
 
         service, _, _ = make_service(recording)
         service.request_order("Cuba Libre")
         await service._task
         assert received == [3]
 
-    async def test_broadcasts_each_event_then_navigates_to_welcome(self):
+    async def test_broadcasts_each_event(self):
         service, manager, publisher = make_service()
         service.request_order("Cuba Libre")
         await service._task
         sent = sent_messages(manager)
-        assert [type(m) for m in sent] == [CobotStatus, CobotStatus, Navigate]
-        assert [m.payload.codigo for m in sent[:2]] == [101, 200]
-        assert sent[2].payload.screen is Screen.WELCOME
+        assert [type(m) for m in sent] == [CobotStatus, CobotStatus]
+        assert [m.payload.codigo for m in sent] == [101, 200]
 
     async def test_publishes_each_event_to_analytics(self):
         service, _, publisher = make_service()
         service.request_order("Cuba Libre")
         await service._task
-        published = [c.args[0].evento_id for c in publisher.publish.call_args_list]
-        assert published == ["101", "200"]
+        published = [c.args[0] for c in publisher.publish.call_args_list]
+        assert [e.codigo for e in published] == [101, 200]
+        assert {e.evento_id for e in published} == {DEFAULT_EVENT_ID}
 
-    async def test_navigates_to_welcome_even_if_cobot_service_fails(self):
+    async def test_handles_cobot_service_failure_without_broadcasting(self):
         async def boom(code):
             raise RuntimeError("fallo")
             yield
@@ -149,8 +151,7 @@ class TestRun:
         service, manager, publisher = make_service(boom)
         service.request_order("Cuba Libre")
         await service._task
-        sent = sent_messages(manager)
-        assert [type(m) for m in sent] == [Navigate]
+        assert sent_messages(manager) == []
         publisher.publish.assert_not_called()
 
 
@@ -159,7 +160,7 @@ class TestStop:
     async def test_stop_cancels_running_order_without_navigating(self):
         async def never(code):
             await asyncio.Event().wait()
-            yield _evento("200")
+            yield _evento(200)
 
         service, manager, _ = make_service(never)
         service.request_order("Cuba Libre")
