@@ -1,9 +1,11 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 
 from app import main
+from app.core.voice_response import VoiceEvent
 from app.main import lifespan
 from app.schemas.ws_messages import (
     CloseIngredients,
@@ -17,6 +19,7 @@ from app.services.command_processor import (
     NavigateAction,
     SelectDrinkAction,
     ShowIngredientsAction,
+    VoiceFeedbackAction,
 )
 
 
@@ -65,6 +68,8 @@ async def app_en_marcha(dobles):
     async with lifespan(app):
         app.state.ws_manager.broadcast = AsyncMock()
         yield app
+        for _ in range(5):  # deja terminar las tareas de voz pendientes
+            await asyncio.sleep(0)
 
 
 def _on_action(dobles):
@@ -147,10 +152,14 @@ async def test_close_ingredients_action_envia_close_ingredients(dobles, app_en_m
     assert isinstance(broadcast.await_args.args[0], CloseIngredients)
 
 
-async def test_una_accion_desconocida_no_envia_nada(dobles, app_en_marcha):
+async def test_una_accion_desconocida_no_envia_nada_ni_habla(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar
+):
     await _on_action(dobles)(object())
+    await dejar_hablar()
 
     app_en_marcha.state.ws_manager.broadcast.assert_not_awaited()
+    assert voz_falsa.dichos() == []
 
 
 async def test_cada_accion_envia_un_solo_mensaje_con_su_propio_id(
@@ -166,3 +175,106 @@ async def test_cada_accion_envia_un_solo_mensaje_con_su_propio_id(
     ]
     assert len(enviados) == 2
     assert enviados[0].id != enviados[1].id
+
+
+# ---------- respuestas por voz ----------
+
+
+async def test_navegar_al_menu_dice_la_indicacion_del_menu(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar
+):
+    await _on_action(dobles)(NavigateAction(Screen.MENU))
+    await dejar_hablar()
+
+    assert voz_falsa.dichos() == [(VoiceEvent.VISUALIZE_MENU, {})]
+    voz_falsa.player.play.assert_awaited_once_with(b"audio")
+
+
+@pytest.mark.parametrize("pantalla", [p for p in Screen if p is not Screen.MENU])
+async def test_navegar_a_otras_pantallas_no_habla(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar, pantalla
+):
+    await _on_action(dobles)(NavigateAction(pantalla))
+    await dejar_hablar()
+
+    app_en_marcha.state.ws_manager.broadcast.assert_awaited_once()
+    assert voz_falsa.dichos() == []
+
+
+async def test_navegar_al_menu_envia_el_mensaje_antes_de_hablar(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar
+):
+    orden = []
+    app_en_marcha.state.ws_manager.broadcast = AsyncMock(
+        side_effect=lambda mensaje: orden.append("broadcast")
+    )
+
+    async def sintesis(evento, **kwargs):
+        orden.append("voz")
+        return b"audio"
+
+    voz_falsa.tts.synthesize.side_effect = sintesis
+
+    await _on_action(dobles)(NavigateAction(Screen.MENU))
+    await dejar_hablar()
+
+    assert orden == ["broadcast", "voz"]
+
+
+async def test_mostrar_ingredientes_envia_el_mensaje_y_dice_los_ingredientes(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar
+):
+    await _on_action(dobles)(ShowIngredientsAction("Mojito"))
+    await dejar_hablar()
+
+    app_en_marcha.state.ws_manager.broadcast.assert_awaited_once()
+    assert voz_falsa.dichos() == [(VoiceEvent.SHOW_INGREDIENTS, {"drink": "Mojito"})]
+
+
+@pytest.mark.parametrize(
+    "accion", [SelectDrinkAction("Mojito"), CloseIngredientsAction()]
+)
+async def test_seleccionar_y_cerrar_ingredientes_no_hablan(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar, accion
+):
+    await _on_action(dobles)(accion)
+    await dejar_hablar()
+
+    app_en_marcha.state.ws_manager.broadcast.assert_awaited_once()
+    assert voz_falsa.dichos() == []
+
+
+@pytest.mark.parametrize(
+    "evento", [VoiceEvent.NOT_UNDERSTOOD, VoiceEvent.DRINK_NOT_IN_MENU]
+)
+async def test_la_accion_de_feedback_solo_habla_y_no_envia_nada_al_front(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar, evento
+):
+    await _on_action(dobles)(VoiceFeedbackAction(evento))
+    await dejar_hablar()
+
+    app_en_marcha.state.ws_manager.broadcast.assert_not_awaited()
+    assert voz_falsa.dichos() == [(evento, {})]
+    voz_falsa.player.play.assert_awaited_once_with(b"audio")
+
+
+async def test_la_accion_no_espera_a_que_termine_el_audio(
+    dobles, app_en_marcha, voz_falsa, dejar_hablar
+):
+    liberar = asyncio.Event()
+
+    async def sintesis_lenta(evento, **kwargs):
+        await liberar.wait()
+        return b"audio"
+
+    voz_falsa.tts.synthesize.side_effect = sintesis_lenta
+
+    # Si on_action esperara el audio, esta línea no volvería nunca
+    await asyncio.wait_for(
+        _on_action(dobles)(VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD)), timeout=1
+    )
+
+    voz_falsa.player.play.assert_not_awaited()
+    liberar.set()
+    await dejar_hablar()
+    voz_falsa.player.play.assert_awaited_once_with(b"audio")

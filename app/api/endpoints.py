@@ -1,8 +1,12 @@
+import time
+
 from fastapi import APIRouter
 from pydantic import ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from app.core.voice_response import VoiceEvent
 from app.schemas.ws_messages import (
+    Screen,
     build_catalog_update,
     FrontState,
     OrderRequest,
@@ -20,11 +24,33 @@ from app.services.screen_state import ScreenState
 
 ws_router = APIRouter()
 
+_last_welcome_speak: float = -10.0
+WELCOME_COOLDOWN_SEC: float = 10.0
+
 
 async def handle_client_message(msg, ws: WebSocket) -> None:
+    global _last_welcome_speak
     match msg:
         case FrontState():
+            previous_screen = ScreenState.current
             ScreenState.update(msg.payload)
+            make_initial_welcome = (
+                msg.payload.screen is Screen.WELCOME
+                and previous_screen is not Screen.WELCOME
+            )
+
+            cooldown_ready = (
+                time.monotonic() - _last_welcome_speak
+            ) >= WELCOME_COOLDOWN_SEC
+
+            if (
+                cooldown_ready
+                and make_initial_welcome
+                and hasattr(ws.app.state, "speak")
+            ):
+                _last_welcome_speak = time.monotonic()
+                ws.app.state.speak(VoiceEvent.INITIAL_WELCOME)
+
         case OrderRequest():
             error = ws.app.state.order_service.request_order(msg.payload.nombre_item)
             if error:
@@ -73,6 +99,8 @@ async def start_payment(drink_name: str, ws: WebSocket) -> None:
             )
         ),
     )
+    if hasattr(state, "speak"):
+        state.speak(VoiceEvent.PAYMENT)
 
 
 @ws_router.websocket("/ws")

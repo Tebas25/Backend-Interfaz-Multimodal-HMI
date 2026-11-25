@@ -5,10 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import speech_recognition as sr
 
+from app.core.voice_response import VoiceEvent
 from app.schemas.ws_messages import Screen
 from app.services import command_listener_service
 from app.services.command_listener_service import CommandListenerService
-from app.services.command_processor import NavigateAction
+from app.services.command_processor import NavigateAction, VoiceFeedbackAction
 from app.services.screen_state import ScreenState
 
 
@@ -245,9 +246,7 @@ async def test_on_audio_desde_otro_hilo_encola_el_audio_en_el_bucle(on_action):
     servicio = CommandListenerService(on_action=on_action)
     servicio._loop = asyncio.get_running_loop()
 
-    await asyncio.to_thread(
-        servicio._on_audio, None, "audio-1"
-    )
+    await asyncio.to_thread(servicio._on_audio, None, "audio-1")
     llego = await esperar_hasta(lambda: not servicio._queue.empty())
 
     assert llego
@@ -417,8 +416,8 @@ async def test_handle_text_desde_welcome_con_orden_ejecuta_la_accion_de_navegar(
     assert "[Voz] Acción: NavigateAction" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("texto", ["quiero tomar algo", "Rony", "Rony hola", ""])
-async def test_handle_text_sin_palabra_clave_o_sin_orden_no_ejecuta_nada(
+@pytest.mark.parametrize("texto", ["quiero tomar algo", "Rony", ""])
+async def test_handle_text_sin_palabra_clave_o_sin_comando_no_ejecuta_nada(
     on_action, capsys, texto
 ):
     ScreenState.current = Screen.WELCOME
@@ -430,13 +429,38 @@ async def test_handle_text_sin_palabra_clave_o_sin_orden_no_ejecuta_nada(
     assert "[Voz] Acción" not in capsys.readouterr().out
 
 
-async def test_handle_text_desde_menu_no_ejecuta_nada(on_action):
+async def test_handle_text_con_palabra_clave_sin_orden_en_welcome_responde_que_no_entendio(
+    on_action, capsys
+):
+    ScreenState.current = Screen.WELCOME
+    servicio = CommandListenerService(on_action=on_action)
+
+    await servicio.handle_text("Rony hola")
+
+    on_action.assert_awaited_once_with(VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD))
+    assert "[Voz] Acción: VoiceFeedbackAction" in capsys.readouterr().out
+
+
+async def test_handle_text_desde_menu_con_orden_de_pedir_responde_que_no_esta_en_el_menu(
+    on_action,
+):
     ScreenState.current = Screen.MENU
     servicio = CommandListenerService(on_action=on_action)
 
     await servicio.handle_text("Rony quiero tomar algo")
 
-    on_action.assert_not_awaited()
+    on_action.assert_awaited_once_with(
+        VoiceFeedbackAction(VoiceEvent.DRINK_NOT_IN_MENU)
+    )
+
+
+async def test_handle_text_desde_menu_sin_intencion_responde_que_no_entendio(on_action):
+    ScreenState.current = Screen.MENU
+    servicio = CommandListenerService(on_action=on_action)
+
+    await servicio.handle_text("Rony hola")
+
+    on_action.assert_awaited_once_with(VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD))
 
 
 async def test_handle_text_sin_pantalla_conocida_no_ejecuta_nada(on_action):
@@ -456,7 +480,10 @@ async def test_handle_text_usa_la_pantalla_actual_en_el_momento_de_escuchar(on_a
     ScreenState.current = Screen.MENU
     await servicio.handle_text("Rony quiero tomar algo")
 
-    assert on_action.await_count == 1
+    assert [c.args[0] for c in on_action.await_args_list] == [
+        NavigateAction(Screen.MENU),  # en bienvenida navega al menú
+        VoiceFeedbackAction(VoiceEvent.DRINK_NOT_IN_MENU),  # en el menú ya no navega
+    ]
 
 
 async def test_handle_text_entrega_el_texto_y_la_pantalla_a_process_text(

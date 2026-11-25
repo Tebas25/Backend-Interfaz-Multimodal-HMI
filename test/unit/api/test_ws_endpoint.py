@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -5,6 +6,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.api import endpoints
 from app.api.endpoints import handle_client_message, ws_endpoint, ws_router
+from app.core.voice_response import VoiceEvent
 from app.schemas.ws_messages import (
     ErrorMessage,
     FrontState,
@@ -378,3 +380,128 @@ async def test_error_al_responder_un_mensaje_invalido_tambien_limpia_al_cliente(
         await ws_endpoint(ws)
 
     manager.disconnect.assert_called_once_with(ws)
+
+
+# ---------- saludo inicial por voz ----------
+
+
+class Reloj:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def monotonic(self):
+        return self.t
+
+
+@pytest.fixture
+def reloj(monkeypatch):
+    """Reloj controlable solo para el módulo de endpoints (no toca el del bucle de asyncio)."""
+    r = Reloj()
+    monkeypatch.setattr(endpoints, "time", r)
+    return r
+
+
+@pytest.fixture
+def ws_con_voz():
+    ws = MagicMock()
+    ws.app.state.speak = MagicMock()
+    return ws
+
+
+def estado(pantalla, origen=StateSource.TOUCH):
+    return FrontState(payload=StatePayload(screen=pantalla, source=origen))
+
+
+async def test_el_primer_estado_welcome_dice_el_saludo_inicial(ws_con_voz, reloj):
+    await handle_client_message(estado(Screen.WELCOME, StateSource.INIT), ws_con_voz)
+
+    ws_con_voz.app.state.speak.assert_called_once_with(VoiceEvent.INITIAL_WELCOME)
+
+
+async def test_volver_a_welcome_desde_otra_pantalla_dice_el_saludo(ws_con_voz, reloj):
+    await handle_client_message(estado(Screen.MENU), ws_con_voz)
+
+    await handle_client_message(estado(Screen.WELCOME), ws_con_voz)
+
+    ws_con_voz.app.state.speak.assert_called_once_with(VoiceEvent.INITIAL_WELCOME)
+
+
+async def test_seguir_en_welcome_no_repite_el_saludo(ws_con_voz, reloj):
+    await handle_client_message(estado(Screen.WELCOME, StateSource.INIT), ws_con_voz)
+    reloj.t += 60  # aunque el cooldown ya haya pasado
+
+    await handle_client_message(estado(Screen.WELCOME, StateSource.INIT), ws_con_voz)
+
+    ws_con_voz.app.state.speak.assert_called_once()
+
+
+@pytest.mark.parametrize("pantalla", [p for p in Screen if p is not Screen.WELCOME])
+async def test_las_otras_pantallas_no_dicen_el_saludo(ws_con_voz, reloj, pantalla):
+    await handle_client_message(estado(pantalla), ws_con_voz)
+
+    ws_con_voz.app.state.speak.assert_not_called()
+
+
+async def test_el_saludo_respeta_el_cooldown_de_10_segundos(ws_con_voz, reloj):
+    speak = ws_con_voz.app.state.speak
+
+    await handle_client_message(estado(Screen.WELCOME), ws_con_voz)  # t=1000
+    assert speak.call_count == 1
+
+    reloj.t = 1005  # pasó menos del cooldown
+    await handle_client_message(estado(Screen.MENU), ws_con_voz)
+    await handle_client_message(estado(Screen.WELCOME), ws_con_voz)
+    assert speak.call_count == 1
+
+    reloj.t = 1010  # justo el cooldown: ya puede volver a saludar
+    await handle_client_message(estado(Screen.MENU), ws_con_voz)
+    await handle_client_message(estado(Screen.WELCOME), ws_con_voz)
+    assert speak.call_count == 2
+
+
+async def test_el_cooldown_solo_se_consume_cuando_se_saluda(ws_con_voz, reloj):
+    speak = ws_con_voz.app.state.speak
+    await handle_client_message(estado(Screen.WELCOME), ws_con_voz)  # saluda en t=1000
+    inicio = endpoints._last_welcome_speak
+
+    reloj.t = 1003
+    await handle_client_message(estado(Screen.MENU), ws_con_voz)  # no saluda
+    await handle_client_message(estado(Screen.WELCOME), ws_con_voz)  # cooldown activo
+
+    assert speak.call_count == 1
+    assert endpoints._last_welcome_speak == inicio == 1000.0
+
+
+async def test_la_pantalla_se_actualiza_aunque_se_hable(ws_con_voz, reloj):
+    await handle_client_message(estado(Screen.WELCOME), ws_con_voz)
+
+    assert ScreenState.current is Screen.WELCOME
+
+
+async def test_sin_speak_en_el_estado_de_la_app_no_falla_ni_consume_el_cooldown(reloj):
+    ws = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+
+    await handle_client_message(estado(Screen.WELCOME), ws)  # no debe lanzar
+
+    assert ScreenState.current is Screen.WELCOME
+    assert endpoints._last_welcome_speak == -10.0
+
+
+async def test_el_saludo_se_dispara_al_recibir_el_estado_por_el_websocket(
+    make_ws, reloj
+):
+    ws = make_ws([state_json(Screen.WELCOME, StateSource.INIT), WebSocketDisconnect()])
+    ws.app.state.speak = MagicMock()
+
+    await ws_endpoint(ws)
+
+    ws.app.state.speak.assert_called_once_with(VoiceEvent.INITIAL_WELCOME)
+
+
+async def test_un_mensaje_invalido_no_dispara_el_saludo(make_ws, reloj):
+    ws = make_ws(["hola", WebSocketDisconnect()])
+    ws.app.state.speak = MagicMock()
+
+    await ws_endpoint(ws)
+
+    ws.app.state.speak.assert_not_called()

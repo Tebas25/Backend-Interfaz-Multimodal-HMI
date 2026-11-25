@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from app import main
 from app.core.core_constants import COBOT_ID, DEFAULT_EVENT_ID
+from app.core.voice_response import VoiceEvent
 from app.main import app, lifespan
 from app.schemas.ws_messages import PaymentResult
 from app.services.payment_service import PaymentService, PaymentSession, PaymentStatus
@@ -148,27 +149,6 @@ async def test_el_resultado_se_difunde_a_los_clientes(on_result, sesion, estado)
     assert msg.payload.reason is None
 
 
-async def test_un_pago_aprobado_imprime_la_bebida_y_su_codigo_modbus(
-    on_result, sesion, capsys
-):
-    callback, _ = on_result
-
-    await callback(sesion(PaymentStatus.APPROVED))
-
-    assert "[Pago] APROBADO: Mojito (modbus=3)" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("estado", [PaymentStatus.REJECTED, PaymentStatus.EXPIRED])
-async def test_un_pago_no_aprobado_no_imprime_el_aviso_de_aprobacion(
-    on_result, sesion, capsys, estado
-):
-    callback, _ = on_result
-
-    await callback(sesion(estado))
-
-    assert "APROBADO" not in capsys.readouterr().out
-
-
 async def test_un_pago_aprobado_publica_la_transaccion(on_result, sesion, dobles):
     callback, _ = on_result
 
@@ -232,3 +212,74 @@ async def test_una_transaccion_invalida_no_bloquea_el_pedido(
 
     dobles["tx_publisher"].publish.assert_not_called()
     dobles["order_service"].request_order.assert_called_once_with("Ab")
+
+
+# ---------- confirmación por voz ----------
+
+
+async def test_un_pago_aprobado_confirma_por_voz(
+    on_result, sesion, voz_falsa, dejar_hablar
+):
+    callback, _ = on_result
+
+    await callback(sesion(PaymentStatus.APPROVED))
+    await dejar_hablar()
+
+    assert voz_falsa.dichos() == [(VoiceEvent.PAYMENT_CONFIRM, {})]
+    voz_falsa.player.play.assert_awaited_once_with(b"audio")
+
+
+@pytest.mark.parametrize("estado", [PaymentStatus.REJECTED, PaymentStatus.EXPIRED])
+async def test_un_pago_no_aprobado_no_habla(
+    on_result, sesion, voz_falsa, dejar_hablar, estado
+):
+    callback, _ = on_result
+
+    await callback(sesion(estado))
+    await dejar_hablar()
+
+    assert voz_falsa.dichos() == []
+    voz_falsa.player.play.assert_not_awaited()
+
+
+async def test_la_confirmacion_por_voz_no_depende_de_la_transaccion(
+    on_result, sesion, dobles, voz_falsa, dejar_hablar
+):
+    dobles["tx_publisher"].publish.side_effect = RuntimeError("cola rota")
+    callback, _ = on_result
+
+    await callback(sesion(PaymentStatus.APPROVED))
+    await dejar_hablar()
+
+    assert voz_falsa.eventos() == [VoiceEvent.PAYMENT_CONFIRM]
+
+
+async def test_la_confirmacion_por_voz_no_depende_de_que_el_cobot_arranque(
+    on_result, sesion, dobles, voz_falsa, dejar_hablar
+):
+    dobles["order_service"].request_order.return_value = "Ya hay un pedido en curso"
+    callback, _ = on_result
+
+    await callback(sesion(PaymentStatus.APPROVED))
+    await dejar_hablar()
+
+    assert voz_falsa.eventos() == [VoiceEvent.PAYMENT_CONFIRM]
+
+
+async def test_el_resultado_se_difunde_antes_de_confirmar_por_voz(
+    on_result, sesion, voz_falsa, dejar_hablar
+):
+    callback, manager = on_result
+    orden = []
+    manager.broadcast.side_effect = lambda msg: orden.append("broadcast")
+
+    async def sintesis(evento, **kwargs):
+        orden.append("voz")
+        return b"audio"
+
+    voz_falsa.tts.synthesize.side_effect = sintesis
+
+    await callback(sesion(PaymentStatus.APPROVED))
+    await dejar_hablar()
+
+    assert orden == ["broadcast", "voz"]

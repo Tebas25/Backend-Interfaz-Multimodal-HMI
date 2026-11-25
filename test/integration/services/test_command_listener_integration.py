@@ -3,9 +3,10 @@ import asyncio
 import pytest
 import speech_recognition as sr
 
+from app.core.voice_response import VoiceEvent
 from app.schemas.ws_messages import Screen
 from app.services.command_listener_service import CommandListenerService
-from app.services.command_processor import NavigateAction
+from app.services.command_processor import NavigateAction, VoiceFeedbackAction
 from app.services.screen_state import ScreenState
 
 
@@ -116,7 +117,11 @@ async def test_la_misma_frase_se_interpreta_segun_la_pantalla_en_que_este_el_fro
     await hablar(microfono_falso, "a3", "Rony quiero tomar algo")
     await esperar_hasta(lambda: len(procesados) == 3)
 
-    assert escucha == [NavigateAction(Screen.MENU), NavigateAction(Screen.MENU)]
+    assert escucha == [
+        NavigateAction(Screen.MENU),
+        VoiceFeedbackAction(VoiceEvent.DRINK_NOT_IN_MENU),  # en el menú ya no navega
+        NavigateAction(Screen.MENU),
+    ]
 
 
 async def test_varias_ordenes_seguidas_se_procesan_en_orden(

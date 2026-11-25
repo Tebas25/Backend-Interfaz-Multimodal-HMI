@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.api.endpoints import handle_client_message, start_payment
+from app.core.voice_response import VoiceEvent
 from app.schemas.ws_messages import (
     CancelPayment,
     CancelPaymentPayload,
@@ -29,6 +30,7 @@ def ws(make_item):
     ]
     state.payment_service.pay_url = MagicMock(return_value=PAY_URL)
     state.payment_service.cancel = MagicMock()
+    state.speak = MagicMock()
 
     def _start(drink):
         return PaymentSession(
@@ -177,3 +179,49 @@ async def test_los_mensajes_de_pago_no_tocan_el_estado_de_pantalla(ws):
 
     assert ScreenState.current is None
     ws.app.state.order_service.request_order.assert_not_called()
+
+
+# ---------- indicación de pago por voz ----------
+
+
+async def test_start_payment_dice_la_indicacion_de_pago(ws):
+    await start_payment("Mojito", ws)
+
+    ws.app.state.speak.assert_called_once_with(VoiceEvent.PAYMENT)
+
+
+async def test_la_voz_va_despues_de_enviar_payment_started(ws):
+    orden = []
+    ws.app.state.ws_manager.send.side_effect = lambda *a: orden.append("send")
+    ws.app.state.speak.side_effect = lambda *a, **k: orden.append("voz")
+
+    await start_payment("Mojito", ws)
+
+    assert orden == ["send", "voz"]
+
+
+async def test_bebida_no_activa_no_dice_la_indicacion_de_pago(ws):
+    await start_payment("Daiquiri", ws)
+
+    ws.app.state.speak.assert_not_called()
+
+
+async def test_start_payment_sin_speak_en_la_app_funciona_igual(ws):
+    del ws.app.state.speak
+
+    await start_payment("Mojito", ws)  # no debe lanzar
+
+    [msg] = enviado(ws)
+    assert isinstance(msg, PaymentStarted)
+
+
+async def test_handle_start_payment_tambien_dice_la_indicacion_de_pago(ws):
+    await handle_client_message(start("Mojito"), ws)
+
+    ws.app.state.speak.assert_called_once_with(VoiceEvent.PAYMENT)
+
+
+async def test_cancelar_el_pago_no_habla(ws):
+    await handle_client_message(CancelPayment(payload=CancelPaymentPayload()), ws)
+
+    ws.app.state.speak.assert_not_called()

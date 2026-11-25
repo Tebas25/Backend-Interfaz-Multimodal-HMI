@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
+from app.core.voice_response import VoiceEvent
 from app.schemas.ws_messages import (
     FrontState,
     Navigate,
@@ -87,7 +88,7 @@ def marcador() -> Navigate:
 
 
 def test_una_orden_de_voz_en_welcome_envia_navigate_al_menu(
-    microfono_falso, procesados
+    microfono_falso, procesados, voz_falsa
 ):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         ws.send_text(estado(Screen.WELCOME, StateSource.INIT))
@@ -95,18 +96,24 @@ def test_una_orden_de_voz_en_welcome_envia_navigate_al_menu(
 
         microfono_falso.hablar("a1", "Rony, quiero tomar algo")
         mensaje = ws.receive_json()
+        assert esperar(lambda: len(voz_falsa.eventos()) == 2)
 
     assert mensaje["type"] == "navigate"
     assert mensaje["payload"] == {"screen": "menu"}
+    assert voz_falsa.eventos() == [
+        VoiceEvent.INITIAL_WELCOME,  # al reportar el front la pantalla de bienvenida
+        VoiceEvent.VISUALIZE_MENU,  # al navegar al menú por voz
+    ]
 
 
 def test_el_navigate_de_voz_llega_a_todos_los_clientes_conectados(
     microfono_falso, procesados
 ):
     with TestClient(main.app) as client:
-        with client.websocket_connect("/ws") as ws1, client.websocket_connect(
-            "/ws"
-        ) as ws2:
+        with (
+            client.websocket_connect("/ws") as ws1,
+            client.websocket_connect("/ws") as ws2,
+        ):
             ws1.send_text(estado(Screen.WELCOME, StateSource.INIT))
             assert esperar(lambda: ScreenState.current is Screen.WELCOME)
 
@@ -145,13 +152,11 @@ def test_sin_la_palabra_clave_no_se_envia_nada(microfono_falso, procesados):
         client.portal.call(main.app.state.ws_manager.broadcast, marcador())
         primero = ws.receive_json()
 
-    assert (
-        primero["payload"]["screen"] == "welcome"
-    )
+    assert primero["payload"]["screen"] == "welcome"
 
 
 def test_desde_la_pantalla_menu_la_orden_de_pedir_no_navega(
-    microfono_falso, procesados
+    microfono_falso, procesados, voz_falsa
 ):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         ws.send_text(estado(Screen.MENU))
@@ -161,12 +166,15 @@ def test_desde_la_pantalla_menu_la_orden_de_pedir_no_navega(
         assert esperar(lambda: len(procesados) == 1)
         client.portal.call(main.app.state.ws_manager.broadcast, marcador())
         primero = ws.receive_json()
+        assert esperar(lambda: len(voz_falsa.eventos()) == 1)
 
     assert primero["payload"]["screen"] == "welcome"
+    # No hay navegación: el robot solo avisa que esa bebida no está en el menú
+    assert voz_falsa.eventos() == [VoiceEvent.DRINK_NOT_IN_MENU]
 
 
 def test_lo_que_entiende_el_backend_sigue_la_pantalla_que_informa_el_front(
-    microfono_falso, procesados
+    microfono_falso, procesados, voz_falsa
 ):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         ws.send_text(estado(Screen.WELCOME, StateSource.INIT))
@@ -180,10 +188,69 @@ def test_lo_que_entiende_el_backend_sigue_la_pantalla_que_informa_el_front(
         assert esperar(lambda: len(procesados) == 2)
         client.portal.call(main.app.state.ws_manager.broadcast, marcador())
         siguiente = ws.receive_json()
+        assert esperar(lambda: len(voz_falsa.eventos()) == 3)
 
     assert (
         siguiente["payload"]["screen"] == "welcome"
     )  # no hubo un segundo navigate a menu
+    assert voz_falsa.eventos() == [
+        VoiceEvent.INITIAL_WELCOME,
+        VoiceEvent.VISUALIZE_MENU,
+        VoiceEvent.DRINK_NOT_IN_MENU,  # la misma frase en el menú ya no navega
+    ]
+
+
+@pytest.mark.parametrize("frase", ["Rony hola", "Rony cuéntame un chiste"])
+def test_en_welcome_una_orden_sin_sentido_responde_por_voz_y_no_navega(
+    microfono_falso, procesados, voz_falsa, frase
+):
+    with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(estado(Screen.WELCOME, StateSource.INIT))
+        assert esperar(lambda: ScreenState.current is Screen.WELCOME)
+
+        microfono_falso.hablar("a1", frase)
+        assert esperar(lambda: len(procesados) == 1)
+        client.portal.call(main.app.state.ws_manager.broadcast, marcador())
+        primero = ws.receive_json()
+        assert esperar(lambda: len(voz_falsa.eventos()) == 2)
+
+    assert primero["payload"]["screen"] == "welcome"  # solo llegó el marcador
+    assert voz_falsa.eventos() == [
+        VoiceEvent.INITIAL_WELCOME,
+        VoiceEvent.NOT_UNDERSTOOD,
+    ]
+
+
+def test_sin_la_palabra_clave_el_robot_no_responde_por_voz(
+    microfono_falso, procesados, voz_falsa
+):
+    with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(estado(Screen.MENU))
+        assert esperar(lambda: ScreenState.current is Screen.MENU)
+
+        microfono_falso.hablar("a1", "quiero tomar algo")
+        assert esperar(lambda: len(procesados) == 1)
+        client.portal.call(main.app.state.ws_manager.broadcast, marcador())
+        ws.receive_json()
+
+    assert voz_falsa.eventos() == []
+
+
+def test_el_saludo_inicial_se_dice_una_sola_vez_aunque_welcome_se_repita(
+    microfono_falso, voz_falsa
+):
+    with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(estado(Screen.WELCOME, StateSource.INIT))
+        assert esperar(lambda: len(voz_falsa.eventos()) == 1)
+
+        ws.send_text(estado(Screen.MENU))
+        assert esperar(lambda: ScreenState.current is Screen.MENU)
+        ws.send_text(estado(Screen.WELCOME))  # vuelve dentro del cooldown
+        assert esperar(lambda: ScreenState.current is Screen.WELCOME)
+        ws.send_text("hola")  # respuesta de error: los anteriores ya se procesaron
+        assert ws.receive_json()["type"] == "error"
+
+    assert voz_falsa.eventos() == [VoiceEvent.INITIAL_WELCOME]
 
 
 # ---------- resiliencia ----------
@@ -227,6 +294,14 @@ def test_al_iniciar_la_app_empieza_a_escuchar(microfono_falso):
         assert microfono_falso.ambient_calls == [("fuente-de-audio", 1)]
         assert len(microfono_falso.background_calls) == 1
         assert listener._task is not None and not listener._task.done()
+
+
+def test_al_apagar_la_app_se_libera_el_reproductor_de_audio(voz_falsa):
+    with TestClient(main.app):
+        voz_falsa.tts_cls.assert_called_once_with()
+        voz_falsa.player.close.assert_not_called()
+
+    voz_falsa.player.close.assert_called_once()
 
 
 def test_al_apagar_la_app_se_deja_de_escuchar(microfono_falso):

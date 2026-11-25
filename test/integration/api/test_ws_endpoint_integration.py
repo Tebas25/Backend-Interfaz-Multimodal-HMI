@@ -1,12 +1,13 @@
 import time
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.endpoints import ws_router
+from app.core.voice_response import VoiceEvent
 from app.schemas.get_catalog_dto import CobotCatalogResponse
 from app.schemas.ws_messages import (
     CatalogUpdate,
@@ -269,3 +270,58 @@ def test_un_mensaje_invalido_no_borra_el_estado_anterior(app):
         assert ws.receive_json()["type"] == "error"
 
     assert ScreenState.current is Screen.MENU
+
+
+# ---------- saludo inicial por voz ----------
+
+
+def sincronizar(ws):
+    """Un mensaje inválido recibe respuesta: garantiza que los anteriores ya se procesaron."""
+    ws.send_text("hola")
+    assert ws.receive_json()["type"] == "error"
+
+
+def test_al_reportar_welcome_se_dice_el_saludo_inicial(app):
+    app.state.speak = MagicMock()
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.WELCOME, StateSource.INIT))
+        assert esperar(lambda: app.state.speak.call_count == 1)
+
+    app.state.speak.assert_called_once_with(VoiceEvent.INITIAL_WELCOME)
+
+
+def test_el_saludo_no_se_repite_dentro_del_cooldown(app):
+    app.state.speak = MagicMock()
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.WELCOME, StateSource.INIT))
+        assert esperar(lambda: app.state.speak.call_count == 1)
+
+        ws.send_text(state_json(Screen.MENU, StateSource.TOUCH))
+        assert esperar(lambda: ScreenState.current is Screen.MENU)
+        ws.send_text(state_json(Screen.WELCOME, StateSource.TOUCH))
+        assert esperar(lambda: ScreenState.current is Screen.WELCOME)
+        sincronizar(ws)
+
+    app.state.speak.assert_called_once()
+
+
+def test_otras_pantallas_no_dicen_el_saludo(app):
+    app.state.speak = MagicMock()
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.MENU, StateSource.TOUCH))
+        assert esperar(lambda: ScreenState.current is Screen.MENU)
+        sincronizar(ws)
+
+    app.state.speak.assert_not_called()
+
+
+def test_sin_motor_de_voz_el_estado_welcome_se_procesa_igual(app):
+    assert not hasattr(app.state, "speak")
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(state_json(Screen.WELCOME, StateSource.INIT))
+        assert esperar(lambda: ScreenState.current is Screen.WELCOME)
+        sincronizar(ws)
