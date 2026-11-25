@@ -1,6 +1,7 @@
+import asyncio
 import os
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 ENV_DE_PRUEBA = {
     "get_catalog_url": "http://fake-kong/catalog/get",
@@ -129,3 +130,56 @@ def microfono_falso(monkeypatch):
     monkeypatch.setattr(sr, "Microphone", FakeMicrophone)
     monkeypatch.setattr(sr, "Recognizer", lambda: reconocedor)
     return reconocedor
+
+
+# ---------- motor de voz (TTS + reproductor) ----------
+
+
+class VozFalsa:
+    """Reemplaza a TTSService y LocalAudioPlayer: sin red, sin pygame, sin audio real."""
+
+    def __init__(self):
+        self.tts = MagicMock(name="tts_service")
+        self.tts.synthesize = AsyncMock(return_value=b"audio")
+        self.player = MagicMock(name="audio_player")
+        self.player.play = AsyncMock()
+        self.player.close = MagicMock()
+        self.tts_cls = MagicMock(name="TTSService", return_value=self.tts)
+        self.player_cls = MagicMock(name="LocalAudioPlayer", return_value=self.player)
+
+    def dichos(self):
+        """Lo que se pidió sintetizar, en orden: [(evento, kwargs), ...]."""
+        return [(c.args[0], c.kwargs) for c in self.tts.synthesize.await_args_list]
+
+    def eventos(self):
+        return [evento for evento, _ in self.dichos()]
+
+
+@pytest.fixture(autouse=True)
+def voz_falsa(monkeypatch):
+    """Ninguna prueba debe sintetizar voz (red) ni abrir el dispositivo de audio."""
+    from app import main
+
+    voz = VozFalsa()
+    monkeypatch.setattr(main, "TTSService", voz.tts_cls)
+    monkeypatch.setattr(main, "LocalAudioPlayer", voz.player_cls)
+    return voz
+
+
+@pytest.fixture
+def dejar_hablar():
+    """Cede el control al bucle para que terminen las tareas que lanza `speak`."""
+
+    async def _dejar_hablar(vueltas: int = 5):
+        for _ in range(vueltas):
+            await asyncio.sleep(0)
+
+    return _dejar_hablar
+
+
+@pytest.fixture(autouse=True)
+def sin_saludo_previo(monkeypatch):
+    """El cooldown del saludo es estado global del módulo: se reinicia en cada prueba."""
+    from app.api import endpoints
+
+    monkeypatch.setattr(endpoints, "_last_welcome_speak", -10.0)

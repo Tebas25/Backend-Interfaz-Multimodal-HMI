@@ -27,7 +27,7 @@ class OrderService:
         watcher,
         cobot: CobotService,
         publisher: Publisher[EventsDTO],
-        on_voice: Callable[..., None] | None = None,
+        on_voice: Callable[..., asyncio.Task] | None = None,
     ):
         self._manager = manager
         self._watcher = watcher

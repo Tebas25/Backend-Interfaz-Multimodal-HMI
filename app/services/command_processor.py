@@ -114,6 +114,11 @@ CLOSE_WORDS = frozenset(
     {"cerrar", "cierra", "cierralo", "regresar", "regresa", "volver", "vuelve", "atras"}
 )
 
+REQUEST_WORDS = frozenset(
+    {"quiero", "quisiera", "dame", "dime", "ponme", "sirveme", "preparame", "pido"}
+)
+INTENT_WORDS = ORDER_WORDS | INGREDIENT_WORDS | REQUEST_WORDS
+
 
 def handle_welcome(command: str, items: Sequence[CobotMenuItem]) -> VoiceAction | None:
     if ORDER_WORDS & set(command.split()):
@@ -129,7 +134,9 @@ def handle_menu(command: str, items: Sequence[CobotMenuItem]) -> VoiceAction | N
 
     drink = find_drink(command, items)
     if drink is None:
-        return VoiceFeedbackAction(VoiceEvent.DRINK_NOT_IN_MENU)
+        if INTENT_WORDS & words:
+            return VoiceFeedbackAction(VoiceEvent.DRINK_NOT_IN_MENU)
+        return VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD)
     if INGREDIENT_WORDS & words:
         return ShowIngredientsAction(drink.nombre_item)
     return SelectDrinkAction(drink.nombre_item)
