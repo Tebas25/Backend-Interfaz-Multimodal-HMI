@@ -1,3 +1,5 @@
+import asyncio
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,6 +20,7 @@ from app.schemas.ws_messages import (
     CloseIngredients,
     PaymentResultPayload,
     PaymentResult,
+    Screen,
 )
 from app.services.catalog_watcher_service import CatalogWatcher
 from app.services.command_listener_service import CommandListenerService
@@ -26,6 +29,7 @@ from app.services.command_processor import (
     SelectDrinkAction,
     ShowIngredientsAction,
     CloseIngredientsAction,
+    VoiceFeedbackAction,
 )
 from app.services.connection_manager import ConnectionManager
 from app.services.http_request_service import HttpRequestService
@@ -37,12 +41,27 @@ from app.services.publisher import Publisher
 from app.services.payment_service import PaymentSession, PaymentStatus, PaymentService
 from app.core.core_constants import COBOT_ID, DEFAULT_EVENT_ID
 from app.schemas.transactions_dto import TransactionsDTO
+from app.core.voice_response import VoiceEvent
+from app.services.local_audio_player import LocalAudioPlayer
+from app.services.tts_service import TTSService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     manager = ConnectionManager()
     app.state.ws_manager = manager
+    tts_service = TTSService()
+    audio_player = LocalAudioPlayer()
+
+    async def _speak_task(event: VoiceEvent, **kwargs) -> None:
+        audio = await tts_service.synthesize(event, **kwargs)
+        if audio:
+            await audio_player.play(audio)
+
+    def speak(event: VoiceEvent, **kwargs) -> None:
+        asyncio.create_task(_speak_task(event, **kwargs))
+
+    app.state.speak = speak
 
     update_svc = HttpRequestService(
         f"{settings.micro_url}/check-update/{COBOT_ID}",
@@ -94,7 +113,9 @@ async def lifespan(app: FastAPI):
     app.state.transaction_publisher = tx_publisher
     tx_publisher.start()
 
-    order_service = OrderService(manager, watcher, cobot_service, publisher)
+    order_service = OrderService(
+        manager, watcher, cobot_service, publisher, on_voice=speak
+    )
     app.state.order_service = order_service
 
     async def execute_action(action) -> None:
@@ -103,14 +124,19 @@ async def lifespan(app: FastAPI):
                 await manager.broadcast(
                     Navigate(payload=NavigatePayload(screen=screen))
                 )
+                if screen is Screen.MENU:
+                    speak(VoiceEvent.VISUALIZE_MENU)
             case SelectDrinkAction(name=name):
                 await manager.broadcast(SelectDrink(payload=DrinkRefPayload(name=name)))
             case ShowIngredientsAction(name=name):
                 await manager.broadcast(
                     ShowIngredients(payload=DrinkRefPayload(name=name))
                 )
+                speak(VoiceEvent.SHOW_INGREDIENTS, drink=name)
             case CloseIngredientsAction():
                 await manager.broadcast(CloseIngredients())
+            case VoiceFeedbackAction(event=event):
+                speak(event)
 
     listener = CommandListenerService(
         on_action=execute_action,
@@ -128,9 +154,7 @@ async def lifespan(app: FastAPI):
             )
         )
         if session.status is PaymentStatus.APPROVED:
-            print(
-                f"[Pago] APROBADO: {session.drink.nombre_item} (modbus={session.drink.codigo_modbus})"
-            )
+            speak(VoiceEvent.PAYMENT_CONFIRM)
             try:
                 tx_publisher.publish(
                     TransactionsDTO(
@@ -173,6 +197,7 @@ async def lifespan(app: FastAPI):
     await update_svc.close()
     await catalog_svc.close()
     payments.close()
+    audio_player.close()
 
 
 app = FastAPI(

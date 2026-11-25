@@ -8,10 +8,12 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "edge-tts>=7.3.1",
     "fastapi[standard]>=0.142.2",
     "pyaudio>=0.2.14",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
+    "pygame>=2.6.1",
     "pymodbus>=3.16.1",
     "pytest>=9.1.1",
     "python-dotenv>=1.2.3",

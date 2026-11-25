@@ -6,6 +6,7 @@ from typing import Callable, Sequence, Union
 
 from app.models.cobot_menu_item import CobotMenuItem
 from app.schemas.ws_messages import Screen
+from app.core.voice_response import VoiceEvent
 
 WAKE_WORDS = frozenset({"rony", "roni", "ronny", "ronnie", "ronni"})
 
@@ -33,8 +34,17 @@ class CloseIngredientsAction:
     pass
 
 
+@dataclass(frozen=True)
+class VoiceFeedbackAction:
+    event: VoiceEvent
+
+
 VoiceAction = Union[
-    NavigateAction, SelectDrinkAction, ShowIngredientsAction, CloseIngredientsAction
+    NavigateAction,
+    SelectDrinkAction,
+    ShowIngredientsAction,
+    CloseIngredientsAction,
+    VoiceFeedbackAction,
 ]
 
 
@@ -108,7 +118,7 @@ CLOSE_WORDS = frozenset(
 def handle_welcome(command: str, items: Sequence[CobotMenuItem]) -> VoiceAction | None:
     if ORDER_WORDS & set(command.split()):
         return NavigateAction(Screen.MENU)
-    return None
+    return VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD)
 
 
 def handle_menu(command: str, items: Sequence[CobotMenuItem]) -> VoiceAction | None:
@@ -119,7 +129,7 @@ def handle_menu(command: str, items: Sequence[CobotMenuItem]) -> VoiceAction | N
 
     drink = find_drink(command, items)
     if drink is None:
-        return None
+        return VoiceFeedbackAction(VoiceEvent.DRINK_NOT_IN_MENU)
     if INGREDIENT_WORDS & words:
         return ShowIngredientsAction(drink.nombre_item)
     return SelectDrinkAction(drink.nombre_item)
