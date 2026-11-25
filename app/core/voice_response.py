@@ -19,6 +19,6 @@ class VoiceEvent(str, Enum):
 
 def build_voice_message(event: VoiceEvent, **kwargs) -> str:
     try:
-        return event.format(**kwargs)
+        return event.value.format(**kwargs)
     except KeyError:
         return VoiceEvent.NOT_UNDERSTOOD.value

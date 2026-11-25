@@ -5,18 +5,22 @@ from decimal import Decimal
 import pytest
 
 from app.models.cobot_menu_item import CobotMenuItem
+from app.core.voice_response import VoiceEvent
 from app.schemas.ws_messages import Screen
 from app.services.command_processor import (
     CLOSE_WORDS,
     HANDLERS,
     INGREDIENT_WORDS,
+    INTENT_WORDS,
     ORDER_WORDS,
+    REQUEST_WORDS,
     WAKE_WORDS,
     CloseIngredientsAction,
     NavigateAction,
     SelectDrinkAction,
     ShowIngredientsAction,
     VoiceAction,
+    VoiceFeedbackAction,
     extract_command,
     find_drink,
     handle_menu,
@@ -41,6 +45,9 @@ MOJITO = bebida("Mojito")
 DAIQUIRI = bebida("Daiquiri")
 PINA = bebida("Piña colada")
 MENU_DE_PRUEBA = (MOJITO, DAIQUIRI, PINA)
+
+NO_ENTENDIDO = VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD)
+NO_ESTA_EN_EL_MENU = VoiceFeedbackAction(VoiceEvent.DRINK_NOT_IN_MENU)
 
 # =====================  normalize  =====================
 
@@ -106,6 +113,17 @@ def test_cada_palabra_de_ingredientes_ya_esta_normalizada(palabra):
 @pytest.mark.parametrize("palabra", sorted(CLOSE_WORDS))
 def test_cada_palabra_de_cierre_ya_esta_normalizada(palabra):
     assert normalize(palabra).strip() == palabra
+
+
+@pytest.mark.parametrize("palabra", sorted(REQUEST_WORDS))
+def test_cada_palabra_de_solicitud_ya_esta_normalizada(palabra):
+    assert normalize(palabra).strip() == palabra
+
+
+def test_las_palabras_de_intencion_son_pedido_ingredientes_y_solicitud():
+    assert INTENT_WORDS == ORDER_WORDS | INGREDIENT_WORDS | REQUEST_WORDS
+    assert {"quiero", "dame"} <= REQUEST_WORDS
+    assert not INTENT_WORDS & CLOSE_WORDS
 
 
 @pytest.mark.parametrize("variante", sorted(WAKE_WORDS))
@@ -197,6 +215,7 @@ def test_voice_action_agrupa_todas_las_acciones():
         SelectDrinkAction,
         ShowIngredientsAction,
         CloseIngredientsAction,
+        VoiceFeedbackAction,
     }
 
 
@@ -237,6 +256,33 @@ def test_close_ingredients_action_no_tiene_datos_y_es_inmutable():
         setattr(CloseIngredientsAction(), "x", 1)
 
 
+# =====================  VoiceFeedbackAction  =====================
+
+
+@pytest.mark.parametrize("evento", list(VoiceEvent))
+def test_voice_feedback_action_guarda_el_evento(evento):
+    assert VoiceFeedbackAction(evento).event is evento
+
+
+def test_voice_feedback_action_es_inmutable():
+    accion = VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD)
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(accion, "event", VoiceEvent.PAYMENT)
+
+    assert accion.event is VoiceEvent.NOT_UNDERSTOOD
+
+
+def test_voice_feedback_action_se_compara_por_valor_y_se_puede_hashear():
+    assert VoiceFeedbackAction(VoiceEvent.PAYMENT) == VoiceFeedbackAction(
+        VoiceEvent.PAYMENT
+    )
+    assert VoiceFeedbackAction(VoiceEvent.PAYMENT) != VoiceFeedbackAction(
+        VoiceEvent.NOT_UNDERSTOOD
+    )
+    assert len({NO_ENTENDIDO, VoiceFeedbackAction(VoiceEvent.NOT_UNDERSTOOD)}) == 1
+
+
 # =====================  handle_welcome  =====================
 
 
@@ -262,22 +308,21 @@ def test_welcome_navega_al_menu_si_la_frase_contiene_una_palabra_de_pedido(coman
 @pytest.mark.parametrize(
     "comando", ["", "hola", "que hora es", "cuentame un chiste", "gracias"]
 )
-def test_welcome_sin_palabra_de_pedido_no_hace_nada(comando):
-    assert handle_welcome(comando, ()) is None
+def test_welcome_sin_palabra_de_pedido_responde_que_no_entendio(comando):
+    assert handle_welcome(comando, ()) == NO_ENTENDIDO
 
 
 def test_welcome_compara_palabras_completas_no_fragmentos():
-    assert (
-        handle_welcome("ordenarlo", ()) is None
-    )  # contiene "ordenar" pero no es la palabra
-    assert handle_welcome("sinmenu", ()) is None
+    # contiene "ordenar" pero no es la palabra
+    assert handle_welcome("ordenarlo", ()) == NO_ENTENDIDO
+    assert handle_welcome("sinmenu", ()) == NO_ENTENDIDO
 
 
 # =====================  handle_menu  =====================
 
 
 def test_welcome_ignora_las_bebidas_del_menu():
-    assert handle_welcome("quiero un mojito", MENU_DE_PRUEBA) is None
+    assert handle_welcome("quiero un mojito", MENU_DE_PRUEBA) == NO_ENTENDIDO
     assert handle_welcome("tomar un mojito", MENU_DE_PRUEBA) == NavigateAction(
         Screen.MENU
     )
@@ -412,18 +457,54 @@ def test_menu_ingredientes_tienen_prioridad_sobre_seleccionar():
 
 
 @pytest.mark.parametrize(
-    "comando", ["", "hola", "ingredientes", "que lleva", "quiero tomar algo", "tequila"]
+    "comando",
+    [
+        "quiero un tequila",
+        "dame un tequila",
+        "ingredientes del tequila",
+        "ingredientes",
+        "que lleva",
+        "quiero tomar algo",
+        "ponme algo de beber",
+    ],
 )
-def test_menu_sin_una_bebida_conocida_no_hace_nada(comando):
-    assert handle_menu(comando, MENU_DE_PRUEBA) is None
+def test_menu_pidiendo_algo_que_no_esta_responde_que_no_esta_en_el_menu(comando):
+    assert handle_menu(comando, MENU_DE_PRUEBA) == NO_ESTA_EN_EL_MENU
 
 
-def test_menu_sin_bebidas_cargadas_no_selecciona_nada():
-    assert handle_menu("quiero un mojito", ()) is None
+@pytest.mark.parametrize(
+    "comando", ["", "hola", "como estas", "gracias", "buenos dias", "tequila"]
+)
+def test_menu_sin_intencion_de_pedir_responde_que_no_entendio(comando):
+    assert handle_menu(comando, MENU_DE_PRUEBA) == NO_ENTENDIDO
+
+
+@pytest.mark.parametrize("palabra", sorted(INTENT_WORDS))
+def test_menu_cada_palabra_de_intencion_con_bebida_desconocida_no_esta_en_el_menu(
+    palabra,
+):
+    assert handle_menu(f"{palabra} tequila", MENU_DE_PRUEBA) == NO_ESTA_EN_EL_MENU
+
+
+def test_menu_sin_bebidas_cargadas_dice_que_no_esta_en_el_menu():
+    assert handle_menu("quiero un mojito", ()) == NO_ESTA_EN_EL_MENU
+
+
+def test_menu_sin_bebidas_cargadas_y_sin_intencion_no_entiende():
+    assert handle_menu("hola", ()) == NO_ENTENDIDO
 
 
 def test_menu_no_navega_con_las_palabras_de_pedido():
-    assert handle_menu("quiero tomar algo", MENU_DE_PRUEBA) is None
+    accion = handle_menu("quiero tomar algo", MENU_DE_PRUEBA)
+
+    assert not isinstance(accion, NavigateAction)
+
+
+def test_menu_una_bebida_reconocida_gana_sobre_el_feedback():
+    assert handle_menu("hola quiero un mojito", MENU_DE_PRUEBA) == SelectDrinkAction(
+        "Mojito"
+    )
+    assert handle_menu("hola un mojito", MENU_DE_PRUEBA) == SelectDrinkAction("Mojito")
 
 
 # =====================  HANDLERS  =====================
@@ -443,8 +524,6 @@ def test_una_pantalla_sin_handler_no_genera_acciones(pantalla):
 def test_los_handlers_registrados_son_los_de_cada_pantalla():
     assert HANDLERS[Screen.WELCOME] is handle_welcome
     assert HANDLERS[Screen.MENU] is handle_menu
-
-
 
 
 def test_desde_welcome_la_orden_de_pedir_navega_al_menu():
@@ -473,17 +552,39 @@ def test_frases_con_la_palabra_clave_y_una_orden_de_pedido_navegan_al_menu(texto
     [
         "quiero tomar algo",
         "dame el menu por favor",
+        "hola",
         "Rony",
-        "Rony hola",
+        "¡Rony!",
         "",
     ],
 )
-def test_sin_palabra_clave_o_sin_orden_no_hay_accion(texto):
+def test_sin_palabra_clave_o_sin_comando_no_hay_accion(texto):
     assert process_text(texto, Screen.WELCOME) is None
+    assert process_text(texto, Screen.MENU, MENU_DE_PRUEBA) is None
 
 
-def test_desde_la_pantalla_menu_la_misma_orden_no_hace_nada():
-    assert process_text("Rony quiero tomar algo", Screen.MENU, MENU_DE_PRUEBA) is None
+@pytest.mark.parametrize("texto", ["Rony hola", "Rony cuentame un chiste"])
+def test_con_palabra_clave_pero_sin_orden_en_welcome_responde_que_no_entendio(texto):
+    assert process_text(texto, Screen.WELCOME) == NO_ENTENDIDO
+
+
+def test_desde_la_pantalla_menu_la_orden_de_pedir_no_navega():
+    accion = process_text("Rony quiero tomar algo", Screen.MENU, MENU_DE_PRUEBA)
+
+    assert accion == NO_ESTA_EN_EL_MENU
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        ("Rony hola", NO_ENTENDIDO),
+        ("Rony tequila", NO_ENTENDIDO),
+        ("Rony quiero un tequila", NO_ESTA_EN_EL_MENU),
+        ("Rony ingredientes del tequila", NO_ESTA_EN_EL_MENU),
+    ],
+)
+def test_process_text_en_menu_elige_el_feedback_segun_la_intencion(texto, esperado):
+    assert process_text(texto, Screen.MENU, MENU_DE_PRUEBA) == esperado
 
 
 def test_process_text_en_menu_selecciona_la_bebida_nombrada():
@@ -509,16 +610,20 @@ def test_process_text_en_menu_sin_la_palabra_clave_no_hace_nada():
 
 
 def test_process_text_en_welcome_no_selecciona_bebidas():
-    assert process_text("Rony quiero un mojito", Screen.WELCOME, MENU_DE_PRUEBA) is None
+    accion = process_text("Rony quiero un mojito", Screen.WELCOME, MENU_DE_PRUEBA)
+
+    assert accion == NO_ENTENDIDO
 
 
 def test_process_text_sin_bebidas_por_defecto_no_selecciona_nada():
-    assert process_text("Rony quiero un mojito", Screen.MENU) is None
+    assert process_text("Rony quiero un mojito", Screen.MENU) == NO_ESTA_EN_EL_MENU
 
 
 def test_process_text_las_bebidas_se_leen_en_cada_llamada():
-    assert process_text("Rony un mojito", Screen.MENU, ()) is None
-    assert process_text("Rony un mojito", Screen.MENU, (MOJITO,)) == (
+    assert process_text("Rony quiero un mojito", Screen.MENU, ()) == (
+        NO_ESTA_EN_EL_MENU
+    )
+    assert process_text("Rony quiero un mojito", Screen.MENU, (MOJITO,)) == (
         SelectDrinkAction("Mojito")
     )
 

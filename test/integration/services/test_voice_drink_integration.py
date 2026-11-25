@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
+from app.core.voice_response import VoiceEvent
 from app.models.cobot_menu_item import CobotMenuItem
 from app.schemas.ws_messages import (
     CloseIngredients,
@@ -152,6 +153,26 @@ def test_cerrar_los_ingredientes_envia_close_ingredients(microfono_falso, proces
     assert mensaje["payload"] == {}
 
 
+def test_seleccionar_y_cerrar_no_hablan_pero_los_ingredientes_si(
+    microfono_falso, procesados, voz_falsa
+):
+    with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
+        en_menu(client, ws)
+
+        microfono_falso.hablar("a1", "Rony un mojito")
+        assert ws.receive_json()["type"] == "select_drink"
+        microfono_falso.hablar("a2", "Rony cierra")
+        assert ws.receive_json()["type"] == "close_ingredients"
+        assert voz_falsa.dichos() == []
+
+        microfono_falso.hablar("a3", "Rony ingredientes del mojito")
+        assert ws.receive_json()["type"] == "show_ingredients"
+        assert esperar(lambda: len(voz_falsa.dichos()) == 1)
+
+    assert voz_falsa.dichos() == [(VoiceEvent.SHOW_INGREDIENTS, {"drink": "Mojito"})]
+    voz_falsa.player.play.assert_awaited_once_with(b"audio")
+
+
 def test_los_mensajes_de_voz_son_validos_para_el_contrato(microfono_falso, procesados):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         en_menu(client, ws)
@@ -186,7 +207,7 @@ def test_la_orden_de_bebida_llega_a_todos_los_clientes(microfono_falso, procesad
 
 
 def test_recorrido_completo_de_bienvenida_a_ver_ingredientes_y_elegir(
-    microfono_falso, procesados
+    microfono_falso, procesados, voz_falsa
 ):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         ws.send_text(estado(Screen.WELCOME, StateSource.INIT))
@@ -204,7 +225,13 @@ def test_recorrido_completo_de_bienvenida_a_ver_ingredientes_y_elegir(
         segundo = ws.receive_json()
         microfono_falso.hablar("a4", "Rony quiero la pina colada")
         tercero = ws.receive_json()
+        assert esperar(lambda: len(voz_falsa.dichos()) == 3)
 
+    assert voz_falsa.dichos() == [
+        (VoiceEvent.INITIAL_WELCOME, {}),
+        (VoiceEvent.VISUALIZE_MENU, {}),
+        (VoiceEvent.SHOW_INGREDIENTS, {"drink": "Mojito"}),
+    ]
     assert [m["type"] for m in (primero, segundo, tercero)] == [
         "show_ingredients",
         "close_ingredients",
@@ -216,7 +243,9 @@ def test_recorrido_completo_de_bienvenida_a_ver_ingredientes_y_elegir(
 # ---------- lo que NO debe enviarse ----------
 
 
-def test_una_bebida_dicha_en_bienvenida_no_se_selecciona(microfono_falso, procesados):
+def test_una_bebida_dicha_en_bienvenida_no_se_selecciona(
+    microfono_falso, procesados, voz_falsa
+):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         ws.send_text(estado(Screen.WELCOME, StateSource.INIT))
         assert esperar(lambda: ScreenState.current is Screen.WELCOME)
@@ -225,21 +254,30 @@ def test_una_bebida_dicha_en_bienvenida_no_se_selecciona(microfono_falso, proces
         assert esperar(lambda: len(procesados) == 1)
         client.portal.call(main.app.state.ws_manager.broadcast, marcador())
         primero = ws.receive_json()
+        assert esperar(lambda: len(voz_falsa.eventos()) == 2)
 
     assert primero["type"] == "navigate"
     assert primero["payload"]["screen"] == "welcome"
+    assert voz_falsa.eventos() == [
+        VoiceEvent.INITIAL_WELCOME,
+        VoiceEvent.NOT_UNDERSTOOD,  # en bienvenida no se piden bebidas
+    ]
 
 
 @pytest.mark.parametrize(
-    "frase",
+    "frase, esperado",
     [
-        "un mojito sin la palabra clave",
-        "Rony quiero un tequila",
-        "Rony ingredientes",
-        "Rony hola",
+        ("un mojito sin la palabra clave", []),
+        ("Rony quiero un tequila", [VoiceEvent.DRINK_NOT_IN_MENU]),
+        ("Rony dame un tequila", [VoiceEvent.DRINK_NOT_IN_MENU]),
+        ("Rony ingredientes", [VoiceEvent.DRINK_NOT_IN_MENU]),
+        ("Rony hola", [VoiceEvent.NOT_UNDERSTOOD]),
+        ("Rony tequila", [VoiceEvent.NOT_UNDERSTOOD]),
     ],
 )
-def test_ordenes_que_no_se_entienden_no_envian_nada(microfono_falso, procesados, frase):
+def test_ordenes_que_no_se_entienden_no_envian_nada_y_responden_por_voz(
+    microfono_falso, procesados, voz_falsa, frase, esperado
+):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         en_menu(client, ws)
 
@@ -247,22 +285,27 @@ def test_ordenes_que_no_se_entienden_no_envian_nada(microfono_falso, procesados,
         assert esperar(lambda: len(procesados) == 1)
         client.portal.call(main.app.state.ws_manager.broadcast, marcador())
         primero = ws.receive_json()
+        assert esperar(lambda: len(voz_falsa.eventos()) == len(esperado))
 
-    assert primero["type"] == "navigate"
+    assert primero["type"] == "navigate"  # solo llegó el marcador: nada del front
+    assert voz_falsa.eventos() == esperado
 
 
 def test_una_bebida_nueva_en_el_catalogo_se_reconoce_sin_reiniciar(
-    microfono_falso, procesados
+    microfono_falso, procesados, voz_falsa
 ):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         en_menu(client, ws)
         microfono_falso.hablar("a1", "Rony quiero un daiquiri")
         assert esperar(lambda: len(procesados) == 1)
+        assert esperar(lambda: len(voz_falsa.eventos()) == 1)
 
         WatcherConBebidas.items_activos.append(bebida("Daiquiri"))
         microfono_falso.hablar("a2", "Rony quiero un daiquiri")
         mensaje = ws.receive_json()
 
+    # Antes de existir en el catálogo el robot avisó; después la selecciona sin hablar
+    assert voz_falsa.eventos() == [VoiceEvent.DRINK_NOT_IN_MENU]
     assert mensaje["type"] == "select_drink"
     assert mensaje["payload"] == {"name": "Daiquiri"}
 
@@ -287,8 +330,8 @@ def test_el_estado_payment_del_front_es_aceptado_por_el_backend(
 @pytest.mark.parametrize(
     "frase", ["Rony un mojito", "Rony cierra", "Rony quiero tomar algo"]
 )
-def test_en_la_pantalla_de_pago_la_voz_no_envia_nada(
-    microfono_falso, procesados, frase
+def test_en_la_pantalla_de_pago_la_voz_no_envia_nada_ni_responde(
+    microfono_falso, procesados, voz_falsa, frase
 ):
     with TestClient(main.app) as client, client.websocket_connect("/ws") as ws:
         ws.send_text(estado(Screen.PAYMENT))
@@ -300,3 +343,4 @@ def test_en_la_pantalla_de_pago_la_voz_no_envia_nada(
         primero = ws.receive_json()
 
     assert primero["payload"]["screen"] == "welcome"
+    assert voz_falsa.eventos() == []  # sin handler para esta pantalla no hay respuesta

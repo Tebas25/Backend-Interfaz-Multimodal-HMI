@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
@@ -8,6 +9,7 @@ from starlette.routing import Match
 from app import main
 from app.core.config import settings
 from app.core.core_constants import COBOT_ID
+from app.core.voice_response import VoiceEvent
 from app.main import app, lifespan
 from app.schemas.events_dto import TipoEvento
 from app.schemas.get_catalog_dto import CobotCatalogResponse
@@ -303,7 +305,7 @@ async def test_lifespan_detiene_el_servicio_de_voz_al_apagar(dobles):
 
 
 async def test_lifespan_apaga_en_orden_publicadores_voz_watcher_y_servicios_http(
-    dobles,
+    dobles, voz_falsa
 ):
     orden = []
     dobles["tx_publisher"].stop.side_effect = lambda: orden.append("tx_publicador")
@@ -314,6 +316,7 @@ async def test_lifespan_apaga_en_orden_publicadores_voz_watcher_y_servicios_http
     dobles["watcher"].stop.side_effect = lambda: orden.append("watcher")
     dobles["update_svc"].close.side_effect = lambda: orden.append("update_svc")
     dobles["catalog_svc"].close.side_effect = lambda: orden.append("catalog_svc")
+    voz_falsa.player.close.side_effect = lambda: orden.append("reproductor")
 
     async with lifespan(FastAPI()):
         pass
@@ -327,6 +330,7 @@ async def test_lifespan_apaga_en_orden_publicadores_voz_watcher_y_servicios_http
         "watcher",
         "update_svc",
         "catalog_svc",
+        "reproductor",  # el audio se libera al final
     ]
 
 
@@ -346,7 +350,7 @@ async def test_lifespan_si_no_hay_microfono_la_app_arranca_y_apaga_igual(dobles)
 
 @pytest.mark.parametrize("pantalla", list(Screen))
 async def test_la_accion_de_navegar_hace_broadcast_del_mensaje_navigate(
-    dobles, pantalla
+    dobles, pantalla, dejar_hablar
 ):
     app_falsa = FastAPI()
 
@@ -361,6 +365,7 @@ async def test_la_accion_de_navegar_hace_broadcast_del_mensaje_navigate(
         assert isinstance(mensaje, Navigate)
         assert mensaje.type == "navigate"
         assert mensaje.payload.screen is pantalla
+        await dejar_hablar()  # navegar al menú también lanza una indicación de voz
 
 
 async def test_una_accion_desconocida_no_envia_nada(dobles):
@@ -373,3 +378,108 @@ async def test_una_accion_desconocida_no_envia_nada(dobles):
         await on_action(object())  # no debe lanzar
 
         app_falsa.state.ws_manager.broadcast.assert_not_awaited()
+
+
+# ---------- motor de voz (speak) ----------
+
+
+@pytest.fixture
+def order_cls(monkeypatch):
+    cls = MagicMock(name="OrderService")
+    cls.return_value.stop = AsyncMock()
+    monkeypatch.setattr(main, "OrderService", cls)
+    return cls
+
+
+async def test_lifespan_crea_el_motor_de_voz_y_deja_speak_en_app_state(
+    dobles, voz_falsa
+):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        voz_falsa.tts_cls.assert_called_once_with()
+        voz_falsa.player_cls.assert_called_once_with()
+        assert callable(app_falsa.state.speak)
+
+
+async def test_lifespan_conecta_speak_al_servicio_de_pedidos(dobles, order_cls):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        assert order_cls.call_args.kwargs["on_voice"] is app_falsa.state.speak
+        assert app_falsa.state.order_service is order_cls.return_value
+
+
+async def test_speak_devuelve_la_tarea_para_poder_esperarla(dobles):
+    # El pedido espera la despedida con asyncio.wait_for: speak tiene que devolver la tarea
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        tarea = app_falsa.state.speak(VoiceEvent.PAYMENT)
+
+        assert isinstance(tarea, asyncio.Task)
+        await tarea
+
+
+async def test_speak_sintetiza_el_evento_y_reproduce_el_audio(dobles, voz_falsa):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        await app_falsa.state.speak(VoiceEvent.PAYMENT)
+
+    voz_falsa.tts.synthesize.assert_awaited_once_with(VoiceEvent.PAYMENT)
+    voz_falsa.player.play.assert_awaited_once_with(b"audio")
+
+
+async def test_speak_pasa_los_datos_del_mensaje_a_la_sintesis(dobles, voz_falsa):
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        await app_falsa.state.speak(VoiceEvent.PREPARING_DRINK, drink="Mojito")
+
+    voz_falsa.tts.synthesize.assert_awaited_once_with(
+        VoiceEvent.PREPARING_DRINK, drink="Mojito"
+    )
+
+
+async def test_speak_no_reproduce_nada_si_la_sintesis_no_devuelve_audio(
+    dobles, voz_falsa
+):
+    voz_falsa.tts.synthesize.return_value = None
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        await app_falsa.state.speak(VoiceEvent.PAYMENT)
+
+    voz_falsa.tts.synthesize.assert_awaited_once()
+    voz_falsa.player.play.assert_not_awaited()
+
+
+async def test_speak_no_bloquea_a_quien_lo_llama(dobles, voz_falsa):
+    liberar = asyncio.Event()
+
+    async def sintesis_lenta(evento, **kwargs):
+        await liberar.wait()
+        return b"audio"
+
+    voz_falsa.tts.synthesize.side_effect = sintesis_lenta
+    app_falsa = FastAPI()
+
+    async with lifespan(app_falsa):
+        tarea = app_falsa.state.speak(VoiceEvent.PAYMENT)
+        await asyncio.sleep(0)
+
+        assert not tarea.done()  # speak ya volvió y el audio sigue en curso
+        voz_falsa.player.play.assert_not_awaited()
+
+        liberar.set()
+        await tarea
+
+    voz_falsa.player.play.assert_awaited_once_with(b"audio")
+
+
+async def test_lifespan_libera_el_reproductor_solo_al_apagar(dobles, voz_falsa):
+    async with lifespan(FastAPI()):
+        voz_falsa.player.close.assert_not_called()
+
+    voz_falsa.player.close.assert_called_once()

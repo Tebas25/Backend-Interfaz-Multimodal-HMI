@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
             await audio_player.play(audio)
 
     def speak(event: VoiceEvent, **kwargs) -> asyncio.Task:
-        asyncio.create_task(_speak_task(event, **kwargs))
+        return asyncio.create_task(_speak_task(event, **kwargs))
 
     app.state.speak = speak
 
